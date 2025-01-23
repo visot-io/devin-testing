@@ -17,4 +17,10 @@ export default [
   },
   pluginJs.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ["**/*.js"],  // Only for JavaScript files
+    rules: {
+      "@typescript-eslint/no-require-imports": "off"  // Allow require in JS files
+    }
+  }
 ];
