@@ -102,3 +102,46 @@ export interface PremiumStreamResponse {
     questionId: string;
   };
 }
+
+// Premium Indicate Types
+export interface PremiumIndicateRequest {
+  submissionId: string;
+  productCode: string;
+  partialAnswers: Partial<KnockoutAssessmentRequest['answers']>;
+  estimationLevel: 'QUICK' | 'DETAILED';
+}
+
+export interface PremiumIndicateResponse {
+  submissionId: string;
+  indicativePremium: {
+    minimum: number;
+    maximum: number;
+    estimated: number;
+  };
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  missingFactors: Array<{
+    code: string;
+    description: string;
+    impact: 'HIGH' | 'MEDIUM' | 'LOW';
+  }>;
+}
+
+// Submission Status Types
+export interface SubmissionStatusResponse {
+  submissionId: string;
+  status: 'IN_PROGRESS' | 'COMPLETED' | 'REFERRED' | 'REJECTED';
+  knockoutAssessment: KnockoutAssessmentResponse;
+  premiumCalculations: Array<{
+    calculationId: string;
+    timestamp: string;
+    version: string;
+    result: {
+      totalPremium: number;
+    };
+  }>;
+  timeline: Array<{
+    timestamp: string;
+    event: string;
+    details: Record<string, unknown>;
+  }>;
+}

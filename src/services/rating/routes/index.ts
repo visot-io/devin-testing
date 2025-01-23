@@ -6,22 +6,47 @@ import {
   handlePremiumIndicate,
   handleSubmissionStatus,
 } from '../controllers';
+import {
+  KnockoutAssessmentRequest,
+  KnockoutAssessmentResponse,
+  PremiumCalculationRequest,
+  PremiumCalculationResponse,
+  PremiumStreamRequest,
+  PremiumIndicateRequest,
+  PremiumIndicateResponse,
+  SubmissionStatusResponse,
+} from '../types';
 
 const router = Router();
 
 // Knockout Assessment
-router.post('/knockout-assessment', handleKnockoutAssessment);
+router.post<{}, KnockoutAssessmentResponse, KnockoutAssessmentRequest>(
+  '/knockout-assessment',
+  handleKnockoutAssessment
+);
 
 // Premium Calculation
-router.post('/premium/calculate', handlePremiumCalculation);
+router.post<{}, PremiumCalculationResponse, PremiumCalculationRequest>(
+  '/premium/calculate',
+  handlePremiumCalculation
+);
 
 // Premium Stream
-router.post('/premium/stream', handlePremiumStream);
+router.post<{}, never, PremiumStreamRequest>(
+  '/premium/stream',
+  handlePremiumStream
+);
 
 // Premium Indication
-router.post('/premium/indicate', handlePremiumIndicate);
+router.post<{}, PremiumIndicateResponse, PremiumIndicateRequest>(
+  '/premium/indicate',
+  handlePremiumIndicate
+);
 
 // Submission Status
-router.get('/submission/:submissionId/status', handleSubmissionStatus);
+router.get<{ submissionId: string }, SubmissionStatusResponse>(
+  '/submission/:submissionId/status',
+  handleSubmissionStatus
+);
 
 export const ratingRoutes = router;

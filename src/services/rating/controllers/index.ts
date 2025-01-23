@@ -6,6 +6,9 @@ import {
   PremiumCalculationResponse,
   PremiumStreamRequest,
   PremiumStreamResponse,
+  PremiumIndicateRequest,
+  PremiumIndicateResponse,
+  SubmissionStatusResponse,
 } from '../types';
 
 // Controller placeholder implementations with sample responses
@@ -103,8 +106,11 @@ export const handlePremiumStream = (
   res.write(`data: ${JSON.stringify(sampleUpdate)}\n\n`);
 };
 
-export const handlePremiumIndicate = (req: Request, res: Response) => {
-  res.json({
+export const handlePremiumIndicate = (
+  req: Request<Record<string, never>, Record<string, never>, PremiumIndicateRequest>,
+  res: Response<PremiumIndicateResponse>,
+) => {
+  const sampleResponse: PremiumIndicateResponse = {
     submissionId: req.body.submissionId,
     indicativePremium: {
       minimum: 900,
@@ -119,17 +125,27 @@ export const handlePremiumIndicate = (req: Request, res: Response) => {
         impact: 'HIGH',
       },
     ],
-  });
+  };
+  res.json(sampleResponse);
 };
 
-export const handleSubmissionStatus = (req: Request, res: Response) => {
+export const handleSubmissionStatus = (
+  req: Request<{ submissionId: string }>,
+  res: Response<SubmissionStatusResponse>,
+) => {
   const { submissionId } = req.params;
-  res.json({
+  const sampleResponse: SubmissionStatusResponse = {
     submissionId,
     status: 'IN_PROGRESS',
     knockoutAssessment: {
+      submissionId,
       status: 'ACCEPTED',
       reasons: [],
+      nextSteps: {
+        allowPremiumCalculation: true,
+        requiredDocuments: [],
+        referralInstructions: '',
+      },
     },
     premiumCalculations: [
       {
@@ -148,5 +164,6 @@ export const handleSubmissionStatus = (req: Request, res: Response) => {
         details: {},
       },
     ],
-  });
+  };
+  res.json(sampleResponse);
 };
