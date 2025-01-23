@@ -1,11 +1,13 @@
 'use client'
 
+import { useState } from 'react'
+import { Eye, EyeOff, RotateCcw } from 'lucide-react'
+import { toast } from 'sonner'
+
 import { User } from '@/custom-types'
 import useThemeMountedVisible from '@/hooks/useThemeMounted'
 import { defaultTheme, themeStyles } from '@/lib/utils'
-import { Eye, EyeOff, RotateCcw } from 'lucide-react'
-import { useState } from 'react'
-import { toast } from 'sonner'
+
 import { Button } from '../ui/button'
 import {
   Table,

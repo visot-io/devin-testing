@@ -1,18 +1,16 @@
 'use client'
 
 import SectionTitleSubtitle from '@/components/ui/section-title-subtitle'
-import { Product } from '@/custom-types'
 import { useSmoothLoading } from '@/hooks/useSmoothLoading'
 import useThemeMountedVisible from '@/hooks/useThemeMounted'
 import { Card } from '../ui/card'
+import SectionTitleSubtitle from '../ui/section-title-subtitle'
 import SubSectionTitleSubtitle from '../ui/sub-section-title-subtitle'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { ProductTable } from './ProductTable'
 import { UserViewTable } from './UserViewTable'
 import { InviteNewUserDialog } from './InviteNewUserDialog'
-
-// TODO: Replace with API integration
-import { mockProducts as products } from './mockData'
+import { mockProducts as products } from './mockData' // TODO: Replace with API integration
 
 const APIWorkbenchPageComponent = () => {
   const isContentReady = useSmoothLoading(false, true, false)

@@ -1,9 +1,11 @@
 'use client'
 
+import { EllipsisVertical } from 'lucide-react'
+
 import { Product } from '@/custom-types'
 import useThemeMountedVisible from '@/hooks/useThemeMounted'
 import { defaultTheme, formatDate, themeStyles } from '@/lib/utils'
-import { EllipsisVertical } from 'lucide-react'
+
 import { Button } from '../ui/button'
 import {
   Sheet,

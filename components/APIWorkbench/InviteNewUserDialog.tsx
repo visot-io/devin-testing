@@ -1,11 +1,13 @@
 'use client'
 
-import { InputField } from '@/lib/utils'
-import { mockProducts } from './mockData'
-import { Plus } from 'lucide-react'
 import { useState } from 'react'
+import { Plus } from 'lucide-react'
 import { toast } from 'sonner'
+
+import { InputField } from '@/lib/utils'
+
 import { Button } from '../ui/button'
+import { mockProducts } from './mockData'
 import {
   Dialog,
   DialogContent,
