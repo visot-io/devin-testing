@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Eye, EyeOff, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { User } from '@/custom-types'
+import { User } from '../../types/api'
 import useThemeMountedVisible from '@/hooks/useThemeMounted'
 import { defaultTheme, themeStyles } from '@/lib/utils'
 

@@ -2,7 +2,7 @@
 
 import { EllipsisVertical } from 'lucide-react'
 
-import { Product } from '@/custom-types'
+import { Product } from '../../types/api'
 import useThemeMountedVisible from '@/hooks/useThemeMounted'
 import { defaultTheme, formatDate, themeStyles } from '@/lib/utils'
 

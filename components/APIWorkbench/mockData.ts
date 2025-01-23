@@ -1,4 +1,4 @@
-import { Product, User } from '@/custom-types'
+import { Product, User } from '../../types/api'
 
 // TODO: Replace with API integration
 // Example API endpoint: /api/products
