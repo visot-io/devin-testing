@@ -466,7 +466,7 @@ def check_cloudtrail_s3_logging(cloudtrail_client, s3_client, account_id, trails
                 })
 
         # Only return empty result if truly no trails were found
-        if not trails:
+        if not trails_data:
             results.append({
                 "type": "cloudtrail_s3_logging",
                 "resource": f"arn:aws:::{account_id}",
@@ -500,7 +500,7 @@ def check_cloudtrail_s3_object_read_events(cloudtrail_client, s3_client, account
         buckets_with_read_events = set()
 
         # Check each trail for S3 read events
-        for trail in trails:
+        for trail in trails_data:
             if not trail.get('IsMultiRegionTrail'):
                 continue
 
@@ -520,7 +520,7 @@ def check_cloudtrail_s3_object_read_events(cloudtrail_client, s3_client, account
                             for value in data_resource.get('Values', []):
                                 if value == 'arn:aws:s3':
                                     # All buckets are covered
-                                    buckets_with_read_events.update([b['Name'] for b in buckets])
+                                    buckets_with_read_events.update([b['Name'] for b in buckets_data])
                                 else:
                                     # Extract bucket name from ARN
                                     bucket_arn = value.split('/', 1)[0]
@@ -532,7 +532,7 @@ def check_cloudtrail_s3_object_read_events(cloudtrail_client, s3_client, account
                 continue
 
         # Generate results for each bucket
-        for bucket in buckets:
+        for bucket in buckets_data:
             bucket_name = bucket['Name']
             try:
                 bucket_region = s3_client.get_bucket_location(Bucket=bucket_name)
@@ -598,7 +598,7 @@ def check_cloudtrail_s3_object_write_events(cloudtrail_client, s3_client, accoun
                             for value in data_resource.get('Values', []):
                                 if value == 'arn:aws:s3':
                                     # All buckets are covered
-                                    buckets_with_write_events.update([b['Name'] for b in buckets])
+                                    buckets_with_write_events.update([b['Name'] for b in buckets_data])
                                 else:
                                     # Extract bucket name from ARN
                                     bucket_arn = value.split('/', 1)[0]
@@ -619,7 +619,7 @@ def check_cloudtrail_s3_object_write_events(cloudtrail_client, s3_client, accoun
                             has_write = True
                     
                     if has_s3_object and has_write:
-                        buckets_with_write_events.update([b['Name'] for b in buckets])
+                        buckets_with_write_events.update([b['Name'] for b in buckets_data])
 
             except Exception as e:
                 print(f"Error getting event selectors for trail {trail['Name']}: {str(e)}")
@@ -702,13 +702,13 @@ def check_cloudtrail():
             check_results = []
             with ThreadPoolExecutor(max_workers=4) as executor:
                 future_to_check = {
-                    executor.submit(check_cloudtrail_bucket_public_access, s3_client, cloudtrail_client, account_id, trails_data): "bucket_public",
-                    executor.submit(check_cloudtrail_multi_region_read_write, cloudtrail_client, account_id, trails_data): "multi_region_rw",
-                    executor.submit(check_cloudtrail_multi_region_trail, cloudtrail_client, account_id, trails_data): "multi_region_trail",
-                    executor.submit(check_cloudtrail_logs_integration, cloudtrail_client, account_id, trails_data): "logs_integration",
+                    executor.submit(check_cloudtrail_bucket_public_access, s3_client, cloudtrail_client, account_id): "bucket_public",
+                    executor.submit(check_cloudtrail_multi_region_read_write, cloudtrail_client, account_id): "multi_region_rw",
+                    executor.submit(check_cloudtrail_multi_region_trail, cloudtrail_client, account_id): "multi_region_trail",
+                    executor.submit(check_cloudtrail_logs_integration, cloudtrail_client, account_id): "logs_integration",
                     executor.submit(check_cloudtrail_s3_logging, cloudtrail_client, s3_client, account_id, trails_data): "s3_logging",
                     executor.submit(check_cloudtrail_s3_object_read_events, cloudtrail_client, s3_client, account_id, trails_data, buckets_data, bucket_locations): "s3_read_events",
-                    executor.submit(check_cloudtrail_s3_data_events, cloudtrail_client, s3_client, account_id, trails_data, buckets_data, bucket_locations): "s3_data_events",
+                    executor.submit(check_cloudtrail_s3_data_events, cloudtrail_client, s3_client, account_id): "s3_data_events",
                     executor.submit(check_cloudtrail_s3_object_write_events, cloudtrail_client, s3_client, account_id, trails_data, buckets_data, bucket_locations): "s3_write_events"
                 }
 
