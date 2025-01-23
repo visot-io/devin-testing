@@ -512,7 +512,8 @@ def check_ec2():
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
         try:
-            # Run all checks in parallel using ThreadPoolExecutor
+            # Initialize results lists
+            all_results = []
             check_results = []
             with ThreadPoolExecutor(max_workers=4) as executor:
                 future_to_check = {
