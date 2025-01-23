@@ -11,29 +11,8 @@ import { ProductTable } from './ProductTable'
 import { UserViewTable } from './UserViewTable'
 import { InviteNewUserDialog } from './InviteNewUserDialog'
 
-const products: Product[] = [
-  {
-    id: 1,
-    type: 'General Liability',
-    name: 'Chubb-GL',
-    lineOfBusiness: 'Commercial',
-    liveSince: '2021-01-01'
-  },
-  {
-    id: 2,
-    type: 'Cyber',
-    name: 'Chubb-CY',
-    lineOfBusiness: 'Commercial',
-    liveSince: '2020-06-15'
-  },
-  {
-    id: 3,
-    type: 'Health',
-    name: 'Chubb-HEALTH',
-    lineOfBusiness: 'Personal',
-    liveSince: '2022-03-10'
-  }
-]
+// TODO: Replace with API integration
+import { mockProducts as products } from './mockData'
 
 const APIWorkbenchPageComponent = () => {
   const isContentReady = useSmoothLoading(false, true, false)

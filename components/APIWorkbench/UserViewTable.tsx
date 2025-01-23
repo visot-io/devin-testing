@@ -16,7 +16,7 @@ import {
   TableRow
 } from '../ui/table'
 
-const generateAccessKey = () => 'ak_' + Math.random().toString(36).slice(2, 24)
+import { generateAccessKey, mockUsers } from './mockData'
 
 export interface UserViewTableProps {
   initialUsers?: User[]
@@ -25,35 +25,8 @@ export interface UserViewTableProps {
 
 const UserViewTable: React.FC<UserViewTableProps> = ({ initialUsers, onUserUpdate }) => {
   const { theme } = useThemeMountedVisible()
-  const [users, setUsers] = useState<User[]>(initialUsers || [
-    {
-      id: '1',
-      name: 'Lemonade',
-      joinedAt: '2023-07-20',
-      email: 'john@lemonade.com',
-      role: 'user',
-      status: 'Active',
-      accessKey: generateAccessKey()
-    },
-    {
-      id: '2',
-      name: 'PolicyGenius',
-      joinedAt: '2023-07-20',
-      email: 'jane@policygenius.com',
-      role: 'partner',
-      status: 'Active',
-      accessKey: generateAccessKey()
-    },
-    {
-      id: '3',
-      name: 'Cover Genius',
-      joinedAt: '2023-07-20',
-      email: 'bob@covergenius.com',
-      role: 'user',
-      status: 'Revoked',
-      accessKey: generateAccessKey()
-    }
-  ])
+  // TODO: Replace with API integration
+  const [users, setUsers] = useState<User[]>(initialUsers || mockUsers)
 
   const [showAccessKey, setShowAccessKey] = useState<{
     [key: string]: boolean

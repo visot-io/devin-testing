@@ -1,6 +1,7 @@
 'use client'
 
 import { InputField } from '@/lib/utils'
+import { mockProducts } from './mockData'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -60,9 +61,10 @@ const InviteNewUserDialog: React.FC<InviteNewUserDialogProps> = ({ onInvite }) =
                 <SelectValue placeholder='-- Select Product --' />
               </SelectTrigger>
               <SelectContent>
-                {['General Liability', 'Cyber', 'Health'].map(p => (
-                  <SelectItem key={p} value={p}>
-                    <p>{p}</p>
+                {/* TODO: Replace with API integration */}
+                {mockProducts.map(p => (
+                  <SelectItem key={p.id} value={p.type}>
+                    <p>{p.name}</p>
                   </SelectItem>
                 ))}
               </SelectContent>
