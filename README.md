@@ -1,12 +1,14 @@
-# Devin Testing Repository
+# Rating Service
 
-This repository is set up for testing Node.js applications with ESLint and Prettier configuration.
+TypeScript-based rating service implementation with Express.
 
 ## Project Setup
 
 The project includes:
+- TypeScript for type-safe development
 - ESLint for code linting
 - Prettier for code formatting
+- Express.js for API endpoints
 - Node.js environment
 
 ## Development
@@ -18,12 +20,22 @@ To get started with development:
 npm install
 ```
 
-2. Run linting:
+2. Start development server:
+```bash
+npm run dev
+```
+
+3. Run linting:
 ```bash
 npm run lint
 ```
 
-3. Format code:
+4. Format code:
 ```bash
 npm run format
+```
+
+5. Build for production:
+```bash
+npm run build
 ```
