@@ -23,20 +23,34 @@ import {
   TableRow
 } from '../ui/table'
 
+/** Available theme options for the table */
+type Theme = 'light' | 'dark'
+
+/** Props for the ProductTable component */
 export interface ProductTableProps {
+  /** Array of products to display in the table */
   products: Product[]
+  /** Whether to show action buttons */
   showActions?: boolean
-  onApprove?: () => void
-  onDeny?: () => void
+  /** Callback when a product is approved */
+  onApprove?: (productId: number) => void
+  /** Callback when a product is denied */
+  onDeny?: (productId: number) => void
 }
 
-const ProductTable: React.FC<ProductTableProps> = ({ products }) => {
+/**
+ * ProductTable displays a list of API products with their details and access management
+ * @param props Component props
+ * @returns React component
+ */
+const ProductTable: React.FC<ProductTableProps> = ({ products, onApprove, onDeny }) => {
   const { theme } = useThemeMountedVisible()
+  const currentTheme = theme as Theme
 
   return (
     <Table
-      className={`rounded-xl ${themeStyles[theme as 'light' | 'dark']?.gradient3 || themeStyles[defaultTheme]?.gradient3}`}
-    >
+      className={`rounded-xl ${themeStyles[currentTheme]?.gradient3 || themeStyles[defaultTheme]?.gradient3}`}
+      aria-label="Products table"
       <TableHeader
         className={`${theme === 'light' ? 'bg-neutral-100' : 'bg-white bg-opacity-5'} text-xs font-medium`}
       >
@@ -68,8 +82,8 @@ const ProductTable: React.FC<ProductTableProps> = ({ products }) => {
                   </SheetHeader>
                   <div className='mt-6'>
                     <Table
-                      className={`rounded-xl ${themeStyles[theme as 'light' | 'dark']?.gradient3 || themeStyles[defaultTheme]?.gradient3}`}
-                    >
+                      className={`rounded-xl ${themeStyles[currentTheme]?.gradient3 || themeStyles[defaultTheme]?.gradient3}`}
+                      aria-label="Product access table">
                       <TableHeader
                         className={`${theme === 'light' ? 'bg-neutral-200 bg-opacity-45' : 'bg-white bg-opacity-5'} text-xs font-medium`}
                       >
@@ -83,7 +97,11 @@ const ProductTable: React.FC<ProductTableProps> = ({ products }) => {
                         </TableRow>
                       </TableHeader>
                       <TableBody className='p-6'>
-                        {['General Liability', 'Cyber'].map(p => (
+                        {/* Define accessible product types */}
+                        {(function() {
+                          const ACCESSIBLE_PRODUCTS = ['General Liability', 'Cyber'] as const;
+                          type AccessibleProduct = typeof ACCESSIBLE_PRODUCTS[number];
+                          return ACCESSIBLE_PRODUCTS.map((p: AccessibleProduct) => (
                           <TableRow className='hover:bg-transparent' key={p}>
                             <TableCell className='pl-4'>{p}</TableCell>
                             <TableCell>
@@ -95,7 +113,7 @@ const ProductTable: React.FC<ProductTableProps> = ({ products }) => {
                               </Button>
                             </TableCell>
                           </TableRow>
-                        ))}
+                        ))})()}
                       </TableBody>
                     </Table>
                   </div>

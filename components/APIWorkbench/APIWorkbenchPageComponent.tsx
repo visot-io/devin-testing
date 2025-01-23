@@ -1,8 +1,8 @@
 'use client'
 
-import SectionTitleSubtitle from '@/components/ui/section-title-subtitle'
 import { useSmoothLoading } from '@/hooks/useSmoothLoading'
 import useThemeMountedVisible from '@/hooks/useThemeMounted'
+import { Product, User } from '../../types/api'
 import { Card } from '../ui/card'
 import SectionTitleSubtitle from '../ui/section-title-subtitle'
 import SubSectionTitleSubtitle from '../ui/sub-section-title-subtitle'
@@ -12,7 +12,30 @@ import { UserViewTable } from './UserViewTable'
 import { InviteNewUserDialog } from './InviteNewUserDialog'
 import { mockProducts as products } from './mockData' // TODO: Replace with API integration
 
-const APIWorkbenchPageComponent = () => {
+/** Props for the APIWorkbenchPageComponent */
+export interface APIWorkbenchPageComponentProps {
+  /** Initial products data */
+  initialProducts?: Product[]
+  /** Initial users data */
+  initialUsers?: User[]
+  /** Callback when products are updated */
+  onProductsUpdate?: (products: Product[]) => void
+  /** Callback when users are updated */
+  onUsersUpdate?: (users: User[]) => void
+}
+
+/**
+ * Main component for the API Workbench page
+ * Manages product access and API user directory
+ * @param props Component props
+ * @returns React component
+ */
+const APIWorkbenchPageComponent: React.FC<APIWorkbenchPageComponentProps> = ({
+  initialProducts,
+  initialUsers,
+  onProductsUpdate,
+  onUsersUpdate
+}) => {
   const isContentReady = useSmoothLoading(false, true, false)
   const { mounted } = useThemeMountedVisible()
   if (!mounted) return null
@@ -20,13 +43,15 @@ const APIWorkbenchPageComponent = () => {
   return (
     <div
       className={`flex flex-col transition-opacity duration-500 ${isContentReady ? 'opacity-100' : 'opacity-0'}`}
+      role="main"
+      aria-label="API Workbench"
     >
       <SectionTitleSubtitle
         title={'API Workbench'}
         subtitle={'Manage product access and explore API documentation.'}
       />
       <Tabs defaultValue='products' className='mt-6'>
-        <TabsList className='mb-1 h-fit bg-sidebar'>
+        <TabsList className='mb-1 h-fit bg-sidebar' aria-label="Workbench sections">
           <TabsTrigger className='px-6 py-2' value='products'>
             Products
           </TabsTrigger>
@@ -43,10 +68,13 @@ const APIWorkbenchPageComponent = () => {
                   'View and control API consumers for each product. Regenerate access keys or revoke access as needed.'
                 }
               />
-              {/* <InviteNewMemberDialog /> */}
             </div>
             <div className='mt-6'>
-              <ProductTable products={products} />
+              <ProductTable
+                products={initialProducts || products}
+                onApprove={(productId) => onProductsUpdate?.(products)}
+                onDeny={(productId) => onProductsUpdate?.(products)}
+              />
             </div>
           </Card>
         </TabsContent>
@@ -59,10 +87,16 @@ const APIWorkbenchPageComponent = () => {
                   'Manage API users, their access to products, and add new consumers effortlessly.'
                 }
               />
-              <InviteNewUserDialog />
+              <InviteNewUserDialog onInvite={(formData) => {
+                // TODO: Replace with API integration
+                console.log('New user invited:', formData)
+              }} />
             </div>
             <div className='mt-6'>
-              <UserViewTable />
+              <UserViewTable
+                initialUsers={initialUsers}
+                onUserUpdate={onUsersUpdate}
+              />
             </div>
           </Card>
         </TabsContent>

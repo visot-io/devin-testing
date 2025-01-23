@@ -20,21 +20,37 @@ import {
 
 import { generateAccessKey, mockUsers } from './mockData'
 
+/** Type for tracking visibility state of access keys */
+interface AccessKeyVisibility {
+  [key: string]: boolean
+}
+
+/** Props for the UserViewTable component */
 export interface UserViewTableProps {
+  /** Initial array of users to display */
   initialUsers?: User[]
+  /** Callback when users are updated */
   onUserUpdate?: (users: User[]) => void
 }
 
+/**
+ * UserViewTable displays a list of API users with their access keys and management controls
+ * @param props Component props
+ * @returns React component
+ */
 const UserViewTable: React.FC<UserViewTableProps> = ({ initialUsers, onUserUpdate }) => {
   const { theme } = useThemeMountedVisible()
+  const currentTheme = theme as 'light' | 'dark'
+  
   // TODO: Replace with API integration
   const [users, setUsers] = useState<User[]>(initialUsers || mockUsers)
+  const [showAccessKey, setShowAccessKey] = useState<AccessKeyVisibility>({})
 
-  const [showAccessKey, setShowAccessKey] = useState<{
-    [key: string]: boolean
-  }>({})
-
-  const regenerateAccessKey = (id: string) => {
+  /**
+   * Generates a new access key for the specified user
+   * @param id User ID
+   */
+  const regenerateAccessKey = (id: string): void => {
     const updatedUsers = users.map(user =>
       user.id === id ? { ...user, accessKey: generateAccessKey() } : user
     )
@@ -45,21 +61,29 @@ const UserViewTable: React.FC<UserViewTableProps> = ({ initialUsers, onUserUpdat
     })
   }
 
-  const copyAccessKey = (accessKey: string) => {
+  /**
+   * Copies the access key to clipboard
+   * @param accessKey Access key to copy
+   */
+  const copyAccessKey = (accessKey: string): void => {
     navigator.clipboard.writeText(accessKey)
     toast('Access Key Copied', {
       description: 'The access key has been copied to your clipboard.'
     })
   }
 
-  const toggleShowAccessKey = (id: string) => {
+  /**
+   * Toggles visibility of an access key
+   * @param id User ID
+   */
+  const toggleShowAccessKey = (id: string): void => {
     setShowAccessKey(prev => ({ ...prev, [id]: !prev[id] }))
   }
 
   return (
     <Table
-      className={`rounded-xl ${themeStyles[theme as 'light' | 'dark']?.gradient3 || themeStyles[defaultTheme]?.gradient3}`}
-    >
+      className={`rounded-xl ${themeStyles[currentTheme]?.gradient3 || themeStyles[defaultTheme]?.gradient3}`}
+      aria-label="API Users table"
       <TableHeader
         className={`${theme === 'light' ? 'bg-neutral-100' : 'bg-white bg-opacity-5'} text-xs font-medium`}
       >
