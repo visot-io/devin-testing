@@ -13,12 +13,8 @@ import {
 
 // Controller placeholder implementations with sample responses
 export const handleKnockoutAssessment = (
-  req: Request<
-    Record<string, never>,
-    Record<string, never>,
-    KnockoutAssessmentRequest
-  >,
-  res: Response<KnockoutAssessmentResponse>,
+  req: Request<Record<string, never>, KnockoutAssessmentResponse, KnockoutAssessmentRequest>,
+  res: Response<KnockoutAssessmentResponse>
 ) => {
   const sampleResponse: KnockoutAssessmentResponse = {
     submissionId: req.body.submissionId,
@@ -40,12 +36,8 @@ export const handleKnockoutAssessment = (
 };
 
 export const handlePremiumCalculation = (
-  req: Request<
-    Record<string, never>,
-    Record<string, never>,
-    PremiumCalculationRequest
-  >,
-  res: Response<PremiumCalculationResponse>,
+  req: Request<Record<string, never>, PremiumCalculationResponse, PremiumCalculationRequest>,
+  res: Response<PremiumCalculationResponse>
 ) => {
   const sampleResponse: PremiumCalculationResponse = {
     submissionId: req.body.submissionId,
@@ -77,12 +69,8 @@ export const handlePremiumCalculation = (
 };
 
 export const handlePremiumStream = (
-  req: Request<
-    Record<string, never>,
-    Record<string, never>,
-    PremiumStreamRequest
-  >,
-  res: Response,
+  req: Request<Record<string, never>, never, PremiumStreamRequest>,
+  res: Response
 ) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -107,8 +95,8 @@ export const handlePremiumStream = (
 };
 
 export const handlePremiumIndicate = (
-  req: Request<Record<string, never>, Record<string, never>, PremiumIndicateRequest>,
-  res: Response<PremiumIndicateResponse>,
+  req: Request<Record<string, never>, PremiumIndicateResponse, PremiumIndicateRequest>,
+  res: Response<PremiumIndicateResponse>
 ) => {
   const sampleResponse: PremiumIndicateResponse = {
     submissionId: req.body.submissionId,
@@ -130,8 +118,8 @@ export const handlePremiumIndicate = (
 };
 
 export const handleSubmissionStatus = (
-  req: Request<{ submissionId: string }>,
-  res: Response<SubmissionStatusResponse>,
+  req: Request<{ submissionId: string }, SubmissionStatusResponse>,
+  res: Response<SubmissionStatusResponse>
 ) => {
   const { submissionId } = req.params;
   const sampleResponse: SubmissionStatusResponse = {
