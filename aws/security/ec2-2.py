@@ -475,9 +475,9 @@ def check_ec2_iam_role_data_destruction(ec2_client, account_id: str, all_instanc
                         "type": "ec2_instance_iam_role_destruction"
                     })
 
-                    except Exception as e:
-                        logger.error(f"Error processing instance {instance_id}: {str(e)}")
-                        continue
+            except Exception as e:
+                logger.error(f"Error processing instance {instance_id}: {str(e)}")
+                continue
 
         return results
 
@@ -527,16 +527,16 @@ def check_ec2_iam_role_write_access(ec2_client, account_id: str, all_instances_d
                 instance_arn = f"arn:aws:ec2:{instance['Placement']['AvailabilityZone'][:-1]}:{account_id}:instance/{instance_id}"
                 instance_name = next((tag['Value'] for tag in instance.get('Tags', []) if tag['Key'] == 'Name'), instance_id)
                         
-                        # Get instance profile
-                        instance_profile = instance.get('IamInstanceProfile', {})
-                        if not instance_profile:
-                            results.append({
-                                "resource": instance_arn,
-                                "status": "ok",
-                                "reason": f"{instance_name} has no IAM write level access.",
-                                "type": "ec2_instance_iam_role_write"
-                            })
-                            continue
+                # Get instance profile
+                instance_profile = instance.get('IamInstanceProfile', {})
+                if not instance_profile:
+                    results.append({
+                        "resource": instance_arn,
+                        "status": "ok",
+                        "reason": f"{instance_name} has no IAM write level access.",
+                        "type": "ec2_instance_iam_role_write"
+                    })
+                    continue
                         
                         # Get the role from instance profile
                         profile_arn = instance_profile.get('Arn', '')
@@ -656,16 +656,16 @@ def check_ec2_iam_role_db_write_access(ec2_client, account_id: str, all_instance
                 instance_arn = f"arn:aws:ec2:{instance['Placement']['AvailabilityZone'][:-1]}:{account_id}:instance/{instance_id}"
                 instance_name = next((tag['Value'] for tag in instance.get('Tags', []) if tag['Key'] == 'Name'), instance_id)
                         
-                        # Get instance profile
-                        instance_profile = instance.get('IamInstanceProfile', {})
-                        if not instance_profile:
-                            results.append({
-                                "resource": instance_arn,
-                                "status": "ok",
-                                "reason": f"{instance_name} has no database management write level access.",
-                                "type": "ec2_instance_iam_role_db_write"
-                            })
-                            continue
+                # Get instance profile
+                instance_profile = instance.get('IamInstanceProfile', {})
+                if not instance_profile:
+                    results.append({
+                        "resource": instance_arn,
+                        "status": "ok",
+                        "reason": f"{instance_name} has no database management write level access.",
+                        "type": "ec2_instance_iam_role_db_write"
+                    })
+                    continue
                         
                         # Get the role from instance profile
                         profile_arn = instance_profile.get('Arn', '')
@@ -784,12 +784,12 @@ def check_ec2_backup_plan_protection(ec2_client, account_id: str, all_instances_
                     instance_arn = f"arn:aws:ec2:{instance['Placement']['AvailabilityZone'][:-1]}:{account_id}:instance/{instance_id}"
                     instance_name = next((tag['Value'] for tag in instance.get('Tags', []) if tag['Key'] == 'Name'), instance_id)
                             
-                            results.append({
-                                "resource": instance_arn,
-                                "status": "error",
-                                "reason": f"Error checking backup protection: {error_code} - {error_message}",
-                                "type": "ec2_instance_backup_protection"
-                            })
+                    results.append({
+                        "resource": instance_arn,
+                        "status": "error",
+                        "reason": f"Error checking backup protection: {error_code} - {error_message}",
+                        "type": "ec2_instance_backup_protection"
+                    })
                 
                 logger.error(f"Access denied to AWS Backup: {error_message}")
                 return results
@@ -1115,4 +1115,4 @@ def check_ec2():
         }), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5002)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+    app.run(debug=True, port=5002)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
