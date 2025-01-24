@@ -29,23 +29,33 @@ def get_db_connection():
     )
 
 def insert_check_results(results: List[Dict[str, Any]]) -> None:
-    """Insert check results into database"""
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            for result in results:
-                cur.execute(
-                    """
+    """Insert check results into database using batch operations"""
+    if not results:
+        return
+        
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Prepare batch insert values
+                insert_values = [
+                    (result['reason'], result['resource'], result['status'])
+                    for result in results
+                ]
+                
+                # Execute batch insert
+                cur.executemany("""
                     INSERT INTO aws_project_status 
                     (description, resource, status)
                     VALUES (%s, %s, %s)
-                    """,
-                    (
-                        result['reason'],
-                        result['resource'],
-                        result['status']
-                    )
-                )
-        conn.commit()
+                """, insert_values)
+            conn.commit()
+    except Exception as e:
+        print(f"Error during batch insert: {e}")
+        if 'conn' in locals():
+            try:
+                conn.rollback()  # Rollback on error
+            except:
+                pass
 
 def check_ec2_instance_no_iam_role_with_org_write_access(ec2_client: boto3.client, iam_client: boto3.client, account_id: str, ec2_instances: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with organization write access"""
