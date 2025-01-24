@@ -21,6 +21,9 @@ def get_cached_role(iam_client: boto3.client, role_name: str) -> Optional[Dict]:
     if role_name not in role_cache:
         try:
             role_cache[role_name] = iam_client.get_role(RoleName=role_name)
+        except iam_client.exceptions.NoSuchEntityException:
+            # Silently handle non-existent roles as this is an expected case
+            role_cache[role_name] = None
         except Exception as e:
             print(f"Error fetching role {role_name}: {str(e)}")
             return None
