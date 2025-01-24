@@ -14,18 +14,34 @@ role_cache = {}
 policy_version_cache = {}
 role_policy_cache = {}
 
-def get_all_ec2_instances(ec2_client: boto3.client) -> List[Dict[str, Any]]:
-    """Get all EC2 instances with caching to avoid redundant API calls"""
+def get_all_ec2_instances(ec2_client: boto3.client = None) -> List[Dict[str, Any]]:
+    """Get all EC2 instances from all regions with caching to avoid redundant API calls"""
     global ec2_cache
     if ec2_cache is not None:
         return ec2_cache
         
     ec2_cache = []
     try:
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                ec2_cache.extend(reservation['Instances'])
+        # Get list of all regions
+        if not ec2_client:
+            ec2_client = boto3.client('ec2')
+        regions = [region['RegionName'] for region in ec2_client.describe_regions()['Regions']]
+        
+        # Fetch instances from each region
+        for region in regions:
+            try:
+                regional_client = boto3.client('ec2', region_name=region)
+                paginator = regional_client.get_paginator('describe_instances')
+                for page in paginator.paginate():
+                    for reservation in page['Reservations']:
+                        # Add region information to each instance
+                        for instance in reservation['Instances']:
+                            instance['Region'] = region
+                            ec2_cache.append(instance)
+            except Exception as e:
+                print(f"Error fetching instances from region {region}: {str(e)}")
+                continue
+                
     except Exception as e:
         print(f"Error fetching EC2 instances: {str(e)}")
         return []
@@ -1030,9 +1046,22 @@ def check_ec2():
         cur.close()
         conn.close()
         
-        # Return results
+        # Calculate summary statistics
+        summary = {
+            "total_checks": len(results),
+            "ok": len([r for r in results if r['status'] == 'ok']),
+            "alarm": len([r for r in results if r['status'] == 'alarm']),
+            "error": len([r for r in results if r['status'] == 'error'])
+        }
+
+        # Return results with summary
+        response_data = {
+            "summary": summary,
+            "results": results
+        }
+        
         return app.response_class(
-            response=json.dumps({"items": results}, indent=2),
+            response=json.dumps(response_data, indent=2),
             status=200,
             mimetype='application/json'
         )

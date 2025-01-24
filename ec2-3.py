@@ -1683,14 +1683,35 @@ def check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configur
         ]
 
 
-def get_all_ec2_instances(ec2_client: boto3.client) -> List[Dict[str, Any]]:
-    """Fetch all EC2 instances once and cache them"""
+def get_all_ec2_instances(ec2_client: boto3.client = None) -> List[Dict[str, Any]]:
+    """Fetch all EC2 instances from all regions and cache them"""
     instances = []
-    paginator = ec2_client.get_paginator("describe_instances")
-    for page in paginator.paginate():
-        for reservation in page["Reservations"]:
-            instances.extend(reservation["Instances"])
-    return instances
+    try:
+        # Get list of all regions
+        if not ec2_client:
+            ec2_client = boto3.client('ec2')
+        regions = [region['RegionName'] for region in ec2_client.describe_regions()['Regions']]
+        
+        # Fetch instances from each region
+        for region in regions:
+            try:
+                regional_client = boto3.client('ec2', region_name=region)
+                paginator = regional_client.get_paginator("describe_instances")
+                for page in paginator.paginate():
+                    for reservation in page["Reservations"]:
+                        # Add region information to each instance
+                        for instance in reservation["Instances"]:
+                            instance['Region'] = region
+                            instances.append(instance)
+            except Exception as e:
+                print(f"Error fetching instances from region {region}: {str(e)}")
+                continue
+                
+        return instances
+        
+    except Exception as e:
+        print(f"Error fetching EC2 instances: {str(e)}")
+        return []
 
 
 # Cache for IAM role data
@@ -1910,9 +1931,22 @@ def check_ec2():
         except Exception as e:
             print(f"Error inserting results into database: {e}")
 
-        # Return results with pretty formatting
+        # Calculate summary statistics
+        summary = {
+            "total_checks": len(all_results),
+            "ok": len([r for r in all_results if r['status'] == 'ok']),
+            "alarm": len([r for r in all_results if r['status'] == 'alarm']),
+            "error": len([r for r in all_results if r['status'] == 'error'])
+        }
+
+        # Return results with summary and pretty formatting
+        response_data = {
+            "summary": summary,
+            "results": all_results
+        }
+        
         return app.response_class(
-            response=json.dumps(all_results, indent=6),
+            response=json.dumps(response_data, indent=6),
             status=200,
             mimetype="application/json",
         )
@@ -1935,3 +1969,5 @@ def check_ec2():
 
 if __name__ == "__main__":
     app.run(port=5004)
+
+
