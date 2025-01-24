@@ -8,8 +8,6 @@ import configparser
 import json
 import re
 import concurrent.futures
-from functools import partial
-
 app = Flask(__name__)
 
 # Cache for API calls
@@ -675,9 +673,8 @@ def check_lambda_function_cors_configuration(lambda_client, function: Dict, acco
         print(f"Error checking Lambda function CORS configuration {function_name}: {str(e)}")
         return None
 
-@app.route('/check-lambda')
-def process_region(region: str, session: boto3.Session, cloudtrail_info: Dict, account_id: str) -> List[Dict]:
-    """Process all Lambda functions in a single region"""
+def _process_region(region: str, session: boto3.Session, cloudtrail_info: Dict, account_id: str) -> List[Dict]:
+    """Helper function to process all Lambda functions in a single region"""
     region_results = []
     try:
         lambda_client = session.client('lambda', region_name=region)
@@ -744,7 +741,9 @@ def get_aws_regions(session: boto3.Session) -> List[str]:
     ec2_client = session.client('ec2', region_name='us-east-1')
     return [region['RegionName'] for region in ec2_client.describe_regions()['Regions']]
 
+@app.route('/check-lambda')
 def check_lambda():
+    """Check Lambda functions across all regions"""
     try:
         # Create a single session for reuse
         session = get_aws_session()
@@ -767,17 +766,9 @@ def check_lambda():
         try:
             # Process regions in parallel using ThreadPoolExecutor
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                # Create a partial function with the common arguments
-                process_region_partial = partial(
-                    process_region,
-                    session=session,
-                    cloudtrail_info=cloudtrail_info,
-                    account_id=account_id
-                )
-                
                 # Submit all regions for processing
                 future_to_region = {
-                    executor.submit(process_region_partial, region): region
+                    executor.submit(_process_region, region, session, cloudtrail_info, account_id): region
                     for region in regions
                 }
                 
