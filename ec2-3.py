@@ -20,7 +20,11 @@ def get_cached_role(iam_client: boto3.client, role_name: str) -> Optional[Dict]:
     """Get role details with caching"""
     if role_name not in role_cache:
         try:
-            role_cache[role_name] = iam_client.get_role(RoleName=role_name)
+            role = iam_client.get_role(RoleName=role_name)
+            # Handle AssumeRolePolicyDocument which can be either string or dict
+            if isinstance(role['Role']['AssumeRolePolicyDocument'], str):
+                role['Role']['AssumeRolePolicyDocument'] = json.loads(role['Role']['AssumeRolePolicyDocument'])
+            role_cache[role_name] = role
         except iam_client.exceptions.NoSuchEntityException:
             # Silently handle non-existent roles as this is an expected case
             role_cache[role_name] = None
@@ -169,7 +173,7 @@ def check_ec2_instance_no_iam_role_with_org_write_access(instances: List[Dict[st
                     return False
                 
                 # Check assume role policy
-                assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
+                assume_role_policy = role['Role']['AssumeRolePolicyDocument']
                 is_ec2_service = False
                 
                 for statement in assume_role_policy.get('Statement', []):
@@ -305,7 +309,7 @@ def check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access(instanc
                     return False
                 
                 # Check assume role policy
-                assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
+                assume_role_policy = role['Role']['AssumeRolePolicyDocument']
                 is_ec2_service = False
                 
                 for statement in assume_role_policy.get('Statement', []):
@@ -1141,7 +1145,7 @@ def check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(instances: Li
                         has_tampering_permissions = False
                         
                         # Check assume role policy first
-                        assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
+                        assume_role_policy = role['Role']['AssumeRolePolicyDocument']
                         is_ec2_service = False
                         for statement in assume_role_policy.get('Statement', []):
                             if statement.get('Effect') == 'Allow':
@@ -1276,7 +1280,7 @@ def check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configur
                         has_critical_permissions = False
                         
                         # Check assume role policy first
-                        assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
+                        assume_role_policy = role['Role']['AssumeRolePolicyDocument']
                         is_ec2_service = False
                         for statement in assume_role_policy.get('Statement', []):
                             if statement.get('Effect') == 'Allow':
