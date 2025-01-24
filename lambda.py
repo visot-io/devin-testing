@@ -732,14 +732,24 @@ def batch_insert_results(cur: psycopg2.extensions.cursor, results: List[Dict]) -
         values
     )
 
+def get_aws_session():
+    """Get a reusable AWS session"""
+    return boto3.Session(
+        aws_access_key_id=config['AWS']['AWS_ACCESS_KEY_ID'],
+        aws_secret_access_key=config['AWS']['AWS_SECRET_ACCESS_KEY']
+    )
+
+def get_aws_regions(session: boto3.Session) -> List[str]:
+    """Get list of AWS regions"""
+    ec2_client = session.client('ec2', region_name='us-east-1')
+    return [region['RegionName'] for region in ec2_client.describe_regions()['Regions']]
+
 def check_lambda():
     try:
-        session = boto3.Session(
-            aws_access_key_id=config['AWS']['AWS_ACCESS_KEY_ID'],
-            aws_secret_access_key=config['AWS']['AWS_SECRET_ACCESS_KEY']
-        )
+        # Create a single session for reuse
+        session = get_aws_session()
         
-        # Get AWS account ID
+        # Get AWS account ID once
         sts_client = session.client('sts')
         account_id = sts_client.get_caller_identity()['Account']
         
@@ -747,9 +757,8 @@ def check_lambda():
         cloudtrail_client = session.client('cloudtrail', region_name='us-east-1')
         cloudtrail_info = get_lambda_logging_cloudtrails(cloudtrail_client)
         
-        # Get all regions
-        ec2_client = session.client('ec2', region_name='us-east-1')
-        regions = [region['RegionName'] for region in ec2_client.describe_regions()['Regions']]
+        # Get all regions once
+        regions = get_aws_regions(session)
         
         all_results = []
         conn = get_db_connection()
