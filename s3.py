@@ -8,6 +8,7 @@ import concurrent.futures
 import configparser
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -38,10 +39,10 @@ def get_db_connection() -> psycopg2.extensions.connection:
         psycopg2.extensions.connection: Database connection object
     """
     return psycopg2.connect(
-        host=config['PostgreSQL']['HOST'],
-        database=config['PostgreSQL']['DATABASE'],
-        user=config['PostgreSQL']['USER'],
-        password=config['PostgreSQL']['PASSWORD']
+        host="localhost",
+        database="aws_security",
+        user="postgres",
+        password="postgres"
     )
 
 def get_cached_bucket_attribute(
@@ -587,9 +588,9 @@ def check_s3(bucket_names: Optional[str] = None):
         
         # Initialize AWS clients
         session = boto3.Session(
-            aws_access_key_id=config['AWS']['AWS_ACCESS_KEY_ID'],
-            aws_secret_access_key=config['AWS']['AWS_SECRET_ACCESS_KEY'],
-            region_name=config['AWS']['AWS_REGION']
+            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID_AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY_AWS_SECRET_ACCESS_KEY'),
+            region_name=os.environ.get('AWS_DEFAULT_REGION_AWS_DEFAULT_REGION', 'us-east-1')
         )
         
         s3_client = session.client('s3')
@@ -671,7 +672,15 @@ def check_s3(bucket_names: Optional[str] = None):
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
 
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cur.close()
+            conn.close()
+
     except Exception as e:
+        logging.error(f"Error in check_s3: {str(e)}")
         if 'conn' in locals():
             conn.close()
         return jsonify({"error": str(e)}), 500
