@@ -22,7 +22,7 @@ def get_db_connection():
     )
 
 def _fetch_sns_topics_in_region(sns_client, region: str) -> Dict:
-    """Fetch all SNS topics in a specific region"""
+    """Fetch all SNS topics in a specific region with pre-parsed policies"""
     region_topics = {}
     try:
         paginator = sns_client.get_paginator('list_topics')
@@ -30,9 +30,16 @@ def _fetch_sns_topics_in_region(sns_client, region: str) -> Dict:
             for topic in page['Topics']:
                 topic_arn = topic['TopicArn']
                 if topic_arn not in region_topics:
+                    # Get topic attributes once
                     attributes = sns_client.get_topic_attributes(TopicArn=topic_arn)['Attributes']
+                    
+                    # Pre-parse the policy if it exists
+                    policy_str = attributes.get('Policy', '{}')
+                    parsed_policy = json.loads(policy_str)
+                    
                     region_topics[topic_arn] = {
                         'attributes': attributes,
+                        'parsed_policy': parsed_policy,
                         'region': region,
                         'name': topic_arn.split(':')[-1]
                     }
@@ -94,11 +101,9 @@ def check_sns_topic_policy_prohibit_public_access(topics: Dict, account_id: str)
     results = []
     
     for topic_arn, topic_data in topics.items():
-        attributes = topic_data['attributes']
         topic_name = topic_data['name']
         region = topic_data['region']
-        
-        policy = json.loads(attributes.get('Policy', '{}'))
+        policy = topic_data['parsed_policy']
         public_statements = 0
         
         if policy and 'Statement' in policy:
@@ -167,11 +172,9 @@ def check_sns_topic_policy_prohibit_publishing_access(topics: Dict, account_id: 
     results = []
     
     for topic_arn, topic_data in topics.items():
-        attributes = topic_data['attributes']
         topic_name = topic_data['name']
         region = topic_data['region']
-        
-        policy = json.loads(attributes.get('Policy', '{}'))
+        policy = topic_data['parsed_policy']
         public_publish_statements = 0
         
         if policy and 'Statement' in policy:
@@ -219,11 +222,9 @@ def check_sns_topic_policy_prohibit_subscription_access(topics: Dict, account_id
     results = []
     
     for topic_arn, topic_data in topics.items():
-        attributes = topic_data['attributes']
         topic_name = topic_data['name']
         region = topic_data['region']
-        
-        policy = json.loads(attributes.get('Policy', '{}'))
+        policy = topic_data['parsed_policy']
         public_subscribe_statements = 0
         
         if policy and 'Statement' in policy:
@@ -274,11 +275,9 @@ def check_sns_topic_policy_prohibit_cross_account_access(topics: Dict, account_i
     results = []
     
     for topic_arn, topic_data in topics.items():
-        attributes = topic_data['attributes']
         topic_name = topic_data['name']
         region = topic_data['region']
-        
-        policy = json.loads(attributes.get('Policy', '{}'))
+        policy = topic_data['parsed_policy']
         cross_account_statements = 0
         
         if policy and 'Statement' in policy:
@@ -321,6 +320,21 @@ def check_sns_topic_policy_prohibit_cross_account_access(topics: Dict, account_i
     return results
 
 @app.route('/check-sns')
+def batch_insert_results(cur, results: List[Dict]) -> None:
+    """Insert multiple results into the database in a single batch"""
+    if not results:
+        return
+        
+    values = [(r['reason'], r['resource'], r['status']) for r in results]
+    psycopg2.extras.execute_values(
+        cur,
+        """
+        INSERT INTO aws_project_status (description, resource, status)
+        VALUES %s
+        """,
+        values
+    )
+
 def check_sns():
     try:
         session = boto3.Session(
@@ -332,7 +346,7 @@ def check_sns():
         sts_client = session.client('sts')
         account_id = sts_client.get_caller_identity()['Account']
         
-        # Get all SNS topics
+        # Get all SNS topics with cached attributes
         topics = get_all_sns_topics(session)
         
         all_results = []
@@ -340,80 +354,36 @@ def check_sns():
         cur = conn.cursor()
 
         try:
-            # Check SNS topic encryption
-            encryption_results = check_sns_topic_encrypted_at_rest(topics, account_id)
-            for result in encryption_results:
-                cur.execute(
-                    """
-                    INSERT INTO aws_project_status (description, resource, status)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (result['reason'], result['resource'], result['status'])
-                )
-                all_results.append(result)
+            # Run all checks and collect results
+            check_functions = [
+                check_sns_topic_encrypted_at_rest,
+                check_sns_topic_policy_prohibit_public_access,
+                check_sns_topic_notification_delivery_status_enabled,
+                check_sns_topic_policy_prohibit_publishing_access,
+                check_sns_topic_policy_prohibit_subscription_access,
+                check_sns_topic_policy_prohibit_cross_account_access
+            ]
             
-            # Check SNS topic public access policies
-            policy_results = check_sns_topic_policy_prohibit_public_access(topics, account_id)
-            for result in policy_results:
-                cur.execute(
-                    """
-                    INSERT INTO aws_project_status (description, resource, status)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (result['reason'], result['resource'], result['status'])
-                )
-                all_results.append(result)
-            
-            # Check SNS topic notification delivery status
-            delivery_results = check_sns_topic_notification_delivery_status_enabled(topics, account_id)
-            for result in delivery_results:
-                cur.execute(
-                    """
-                    INSERT INTO aws_project_status (description, resource, status)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (result['reason'], result['resource'], result['status'])
-                )
-                all_results.append(result)
-            
-            # Check SNS topic publishing access policies
-            publish_results = check_sns_topic_policy_prohibit_publishing_access(topics, account_id)
-            for result in publish_results:
-                cur.execute(
-                    """
-                    INSERT INTO aws_project_status (description, resource, status)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (result['reason'], result['resource'], result['status'])
-                )
-                all_results.append(result)
-            
-            # Check SNS topic subscription access policies
-            subscribe_results = check_sns_topic_policy_prohibit_subscription_access(topics, account_id)
-            for result in subscribe_results:
-                cur.execute(
-                    """
-                    INSERT INTO aws_project_status (description, resource, status)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (result['reason'], result['resource'], result['status'])
-                )
-                all_results.append(result)
-            
-            # Check SNS topic cross-account access policies
-            cross_account_results = check_sns_topic_policy_prohibit_cross_account_access(topics, account_id)
-            for result in cross_account_results:
-                cur.execute(
-                    """
-                    INSERT INTO aws_project_status (description, resource, status)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (result['reason'], result['resource'], result['status'])
-                )
-                all_results.append(result)
+            # Execute all checks
+            for check_function in check_functions:
+                results = check_function(topics, account_id)
+                if results:
+                    all_results.extend(results)
+                    # Batch insert results for this check
+                    batch_insert_results(cur, results)
 
             conn.commit()
-            return jsonify(all_results)
+            return jsonify({
+                "status": "success",
+                "data": all_results,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "summary": {
+                    "total_checks": len(all_results),
+                    "ok": len([r for r in all_results if r['status'] == 'ok']),
+                    "alarm": len([r for r in all_results if r['status'] == 'alarm']),
+                    "error": len([r for r in all_results if r['status'] == 'error'])
+                }
+            })
 
         except Exception as e:
             conn.rollback()
