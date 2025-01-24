@@ -3,11 +3,86 @@ import boto3
 import json
 import os
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import psycopg2
 from psycopg2.extras import Json
 
 app = Flask(__name__)
+
+# Caches for IAM queries to reduce API calls
+role_cache: Dict[str, Dict] = {}
+policy_cache: Dict[str, Dict] = {}
+policy_version_cache: Dict[str, Dict] = {}
+role_policies_cache: Dict[str, Dict] = {}
+inline_policy_cache: Dict[str, Dict] = {}
+
+def get_cached_role(iam_client: boto3.client, role_name: str) -> Optional[Dict]:
+    """Get role details with caching"""
+    if role_name not in role_cache:
+        try:
+            role_cache[role_name] = iam_client.get_role(RoleName=role_name)
+        except Exception as e:
+            print(f"Error fetching role {role_name}: {str(e)}")
+            return None
+    return role_cache[role_name]
+
+def get_cached_attached_policies(iam_client: boto3.client, role_name: str) -> Optional[Dict]:
+    """Get attached role policies with caching"""
+    if role_name not in policy_cache:
+        try:
+            policy_cache[role_name] = iam_client.list_attached_role_policies(RoleName=role_name)
+        except Exception as e:
+            print(f"Error fetching policies for role {role_name}: {str(e)}")
+            return None
+    return policy_cache[role_name]
+
+def get_cached_policy_version(iam_client: boto3.client, policy_arn: str) -> Optional[Dict]:
+    """Get policy version with caching"""
+    if policy_arn not in policy_version_cache:
+        try:
+            policy = iam_client.get_policy(PolicyArn=policy_arn)
+            version_id = policy['Policy']['DefaultVersionId']
+            policy_version_cache[policy_arn] = iam_client.get_policy_version(
+                PolicyArn=policy_arn,
+                VersionId=version_id
+            )
+        except Exception as e:
+            print(f"Error fetching policy version for {policy_arn}: {str(e)}")
+            return None
+    return policy_version_cache[policy_arn]
+
+def get_cached_role_policies(iam_client: boto3.client, role_name: str) -> Optional[Dict]:
+    """Get role inline policies with caching"""
+    if role_name not in role_policies_cache:
+        try:
+            policies = iam_client.list_role_policies(RoleName=role_name)
+            role_policies_cache[role_name] = policies
+            # Cache individual policy documents
+            for policy_name in policies['PolicyNames']:
+                policy_key = f"{role_name}_{policy_name}"
+                if policy_key not in inline_policy_cache:
+                    inline_policy_cache[policy_key] = iam_client.get_role_policy(
+                        RoleName=role_name,
+                        PolicyName=policy_name
+                    )
+        except Exception as e:
+            print(f"Error fetching inline policies for role {role_name}: {str(e)}")
+            return None
+    return role_policies_cache[role_name]
+
+def get_cached_inline_policy(iam_client: boto3.client, role_name: str, policy_name: str) -> Optional[Dict]:
+    """Get specific inline policy with caching"""
+    policy_key = f"{role_name}_{policy_name}"
+    if policy_key not in inline_policy_cache:
+        try:
+            inline_policy_cache[policy_key] = iam_client.get_role_policy(
+                RoleName=role_name,
+                PolicyName=policy_name
+            )
+        except Exception as e:
+            print(f"Error fetching inline policy {policy_name} for role {role_name}: {str(e)}")
+            return None
+    return inline_policy_cache[policy_key]
 
 def get_aws_client(service: str) -> boto3.client:
     """Create AWS client for given service"""
@@ -47,7 +122,7 @@ def insert_check_results(results: List[Dict[str, Any]]) -> None:
                 )
         conn.commit()
 
-def check_ec2_instance_no_iam_role_with_org_write_access(ec2_client: boto3.client, iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
+def check_ec2_instance_no_iam_role_with_org_write_access(instances: List[Dict[str, Any]], iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with organization write access"""
     try:
         results = []
@@ -86,7 +161,9 @@ def check_ec2_instance_no_iam_role_with_org_write_access(ec2_client: boto3.clien
             """Check if role has organization write permissions"""
             try:
                 role_name = role_arn.split('/')[-1]
-                role = iam_client.get_role(RoleName=role_name)
+                role = get_cached_role(iam_client, role_name)
+                if not role:
+                    return False
                 
                 # Check assume role policy
                 assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
@@ -106,53 +183,53 @@ def check_ec2_instance_no_iam_role_with_org_write_access(ec2_client: boto3.clien
                     return False
                 
                 # Get attached policies
-                attached_policies = iam_client.list_attached_role_policies(RoleName=role_name)
-                for policy in attached_policies['AttachedPolicies']:
-                    policy_version = iam_client.get_policy_version(
-                        PolicyArn=policy['PolicyArn'],
-                        VersionId=iam_client.get_policy(PolicyArn=policy['PolicyArn'])['Policy']['DefaultVersionId']
-                    )
-                    
-                    for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                attached_policies = get_cached_attached_policies(iam_client, role_name)
+                if attached_policies:
+                    for policy in attached_policies['AttachedPolicies']:
+                        policy_version = get_cached_policy_version(iam_client, policy['PolicyArn'])
+                        if not policy_version:
+                            continue
+                        
+                        for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            if any(action.lower() in actions for action in ORG_WRITE_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                if any(action.lower() in actions for action in ORG_WRITE_ACTIONS):
+                                    return True
                 
                 # Get inline policies
-                inline_policies = iam_client.list_role_policies(RoleName=role_name)
-                for policy_name in inline_policies['PolicyNames']:
-                    policy = iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)
-                    
-                    for statement in policy['PolicyDocument'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                role_policies = get_cached_role_policies(iam_client, role_name)
+                if role_policies:
+                    for policy_name in role_policies['PolicyNames']:
+                        policy = get_cached_inline_policy(iam_client, role_name, policy_name)
+                        if not policy:
+                            continue
+                        
+                        for statement in policy['PolicyDocument'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            if any(action.lower() in actions for action in ORG_WRITE_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                if any(action.lower() in actions for action in ORG_WRITE_ACTIONS):
+                                    return True
                 
                 return False
             except Exception:
                 return False
         
-        # Get all EC2 instances
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
+        # Process all EC2 instances
+        for instance in instances:
                     instance_id = instance['InstanceId']
                     instance_arn = f"arn:aws:ec2:{os.getenv('AWS_REGION', 'us-east-1')}:{account_id}:instance/{instance_id}"
                     
@@ -192,7 +269,7 @@ def check_ec2_instance_no_iam_role_with_org_write_access(ec2_client: boto3.clien
             "type": "ec2_instance_no_iam_role_with_org_write_access"
         }]
 
-def check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access(ec2_client: boto3.client, iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
+def check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access(instances: List[Dict[str, Any]], iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with privilege escalation risk access"""
     try:
         results = []
@@ -220,7 +297,9 @@ def check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access(ec2_cli
             """Check if role has privilege escalation permissions"""
             try:
                 role_name = role_arn.split('/')[-1]
-                role = iam_client.get_role(RoleName=role_name)
+                role = get_cached_role(iam_client, role_name)
+                if not role:
+                    return False
                 
                 # Check assume role policy
                 assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
@@ -240,53 +319,53 @@ def check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access(ec2_cli
                     return False
                 
                 # Get attached policies
-                attached_policies = iam_client.list_attached_role_policies(RoleName=role_name)
-                for policy in attached_policies['AttachedPolicies']:
-                    policy_version = iam_client.get_policy_version(
-                        PolicyArn=policy['PolicyArn'],
-                        VersionId=iam_client.get_policy(PolicyArn=policy['PolicyArn'])['Policy']['DefaultVersionId']
-                    )
-                    
-                    for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                attached_policies = get_cached_attached_policies(iam_client, role_name)
+                if attached_policies:
+                    for policy in attached_policies['AttachedPolicies']:
+                        policy_version = get_cached_policy_version(iam_client, policy['PolicyArn'])
+                        if not policy_version:
+                            continue
+                        
+                        for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            if any(action.lower() in actions for action in PRIVILEGE_ESCALATION_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                if any(action.lower() in actions for action in PRIVILEGE_ESCALATION_ACTIONS):
+                                    return True
                 
                 # Get inline policies
-                inline_policies = iam_client.list_role_policies(RoleName=role_name)
-                for policy_name in inline_policies['PolicyNames']:
-                    policy = iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)
-                    
-                    for statement in policy['PolicyDocument'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                role_policies = get_cached_role_policies(iam_client, role_name)
+                if role_policies:
+                    for policy_name in role_policies['PolicyNames']:
+                        policy = get_cached_inline_policy(iam_client, role_name, policy_name)
+                        if not policy:
+                            continue
+                        
+                        for statement in policy['PolicyDocument'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            if any(action.lower() in actions for action in PRIVILEGE_ESCALATION_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                if any(action.lower() in actions for action in PRIVILEGE_ESCALATION_ACTIONS):
+                                    return True
                 
                 return False
             except Exception:
                 return False
         
-        # Get all EC2 instances
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
+        # Process all EC2 instances
+        for instance in instances:
                     instance_id = instance['InstanceId']
                     instance_arn = f"arn:aws:ec2:{os.getenv('AWS_REGION', 'us-east-1')}:{account_id}:instance/{instance_id}"
                     
@@ -326,7 +405,7 @@ def check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access(ec2_cli
             "type": "ec2_instance_no_iam_role_with_privilege_escalation_risk_access"
         }]
 
-def check_ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_access(ec2_client: boto3.client, iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
+def check_ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_access(instances: List[Dict[str, Any]], iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with group creation and policy attachment access"""
     try:
         results = []
@@ -341,7 +420,9 @@ def check_ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_
             """Check if role has group creation and policy attachment permissions"""
             try:
                 role_name = role_arn.split('/')[-1]
-                role = iam_client.get_role(RoleName=role_name)
+                role = get_cached_role(iam_client, role_name)
+                if not role:
+                    return False
                 
                 # Check assume role policy
                 assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
@@ -361,55 +442,55 @@ def check_ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_
                     return False
                 
                 # Get attached policies
-                attached_policies = iam_client.list_attached_role_policies(RoleName=role_name)
-                for policy in attached_policies['AttachedPolicies']:
-                    policy_version = iam_client.get_policy_version(
-                        PolicyArn=policy['PolicyArn'],
-                        VersionId=iam_client.get_policy(PolicyArn=policy['PolicyArn'])['Policy']['DefaultVersionId']
-                    )
-                    
-                    for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                attached_policies = get_cached_attached_policies(iam_client, role_name)
+                if attached_policies:
+                    for policy in attached_policies['AttachedPolicies']:
+                        policy_version = get_cached_policy_version(iam_client, policy['PolicyArn'])
+                        if not policy_version:
+                            continue
+                        
+                        for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            # Check if both actions are present
-                            if all(action.lower() in actions for action in GROUP_POLICY_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                # Check if both actions are present
+                                if all(action.lower() in actions for action in GROUP_POLICY_ACTIONS):
+                                    return True
                 
                 # Get inline policies
-                inline_policies = iam_client.list_role_policies(RoleName=role_name)
-                for policy_name in inline_policies['PolicyNames']:
-                    policy = iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)
-                    
-                    for statement in policy['PolicyDocument'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                role_policies = get_cached_role_policies(iam_client, role_name)
+                if role_policies:
+                    for policy_name in role_policies['PolicyNames']:
+                        policy = get_cached_inline_policy(iam_client, role_name, policy_name)
+                        if not policy:
+                            continue
+                        
+                        for statement in policy['PolicyDocument'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            # Check if both actions are present
-                            if all(action.lower() in actions for action in GROUP_POLICY_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                # Check if both actions are present
+                                if all(action.lower() in actions for action in GROUP_POLICY_ACTIONS):
+                                    return True
                 
                 return False
             except Exception:
                 return False
         
-        # Get all EC2 instances
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
+        # Process all EC2 instances
+        for instance in instances:
                     instance_id = instance['InstanceId']
                     instance_arn = f"arn:aws:ec2:{os.getenv('AWS_REGION', 'us-east-1')}:{account_id}:instance/{instance_id}"
                     
@@ -449,7 +530,7 @@ def check_ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_
             "type": "ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_access"
         }]
 
-def check_ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_access(ec2_client: boto3.client, iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
+def check_ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_access(instances: List[Dict[str, Any]], iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with role creation and policy attachment access"""
     try:
         results = []
@@ -464,7 +545,9 @@ def check_ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_a
             """Check if role has role creation and policy attachment permissions"""
             try:
                 role_name = role_arn.split('/')[-1]
-                role = iam_client.get_role(RoleName=role_name)
+                role = get_cached_role(iam_client, role_name)
+                if not role:
+                    return False
                 
                 # Check assume role policy
                 assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
@@ -484,55 +567,55 @@ def check_ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_a
                     return False
                 
                 # Get attached policies
-                attached_policies = iam_client.list_attached_role_policies(RoleName=role_name)
-                for policy in attached_policies['AttachedPolicies']:
-                    policy_version = iam_client.get_policy_version(
-                        PolicyArn=policy['PolicyArn'],
-                        VersionId=iam_client.get_policy(PolicyArn=policy['PolicyArn'])['Policy']['DefaultVersionId']
-                    )
-                    
-                    for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                attached_policies = get_cached_attached_policies(iam_client, role_name)
+                if attached_policies:
+                    for policy in attached_policies['AttachedPolicies']:
+                        policy_version = get_cached_policy_version(iam_client, policy['PolicyArn'])
+                        if not policy_version:
+                            continue
+                        
+                        for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            # Check if both actions are present
-                            if all(action.lower() in actions for action in ROLE_POLICY_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                # Check if both actions are present
+                                if all(action.lower() in actions for action in ROLE_POLICY_ACTIONS):
+                                    return True
                 
                 # Get inline policies
-                inline_policies = iam_client.list_role_policies(RoleName=role_name)
-                for policy_name in inline_policies['PolicyNames']:
-                    policy = iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)
-                    
-                    for statement in policy['PolicyDocument'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                role_policies = get_cached_role_policies(iam_client, role_name)
+                if role_policies:
+                    for policy_name in role_policies['PolicyNames']:
+                        policy = get_cached_inline_policy(iam_client, role_name, policy_name)
+                        if not policy:
+                            continue
+                        
+                        for statement in policy['PolicyDocument'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            # Check if both actions are present
-                            if all(action.lower() in actions for action in ROLE_POLICY_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                # Check if both actions are present
+                                if all(action.lower() in actions for action in ROLE_POLICY_ACTIONS):
+                                    return True
                 
                 return False
             except Exception:
                 return False
         
-        # Get all EC2 instances
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
+        # Process all EC2 instances
+        for instance in instances:
                     instance_id = instance['InstanceId']
                     instance_arn = f"arn:aws:ec2:{os.getenv('AWS_REGION', 'us-east-1')}:{account_id}:instance/{instance_id}"
                     
@@ -572,7 +655,7 @@ def check_ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_a
             "type": "ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_access"
         }]
 
-def check_ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_access(ec2_client: boto3.client, iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
+def check_ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_access(instances: List[Dict[str, Any]], iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with user creation and policy attachment access"""
     try:
         results = []
@@ -587,7 +670,9 @@ def check_ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_a
             """Check if role has user creation and policy attachment permissions"""
             try:
                 role_name = role_arn.split('/')[-1]
-                role = iam_client.get_role(RoleName=role_name)
+                role = get_cached_role(iam_client, role_name)
+                if not role:
+                    return False
                 
                 # Check assume role policy
                 assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
@@ -607,55 +692,55 @@ def check_ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_a
                     return False
                 
                 # Get attached policies
-                attached_policies = iam_client.list_attached_role_policies(RoleName=role_name)
-                for policy in attached_policies['AttachedPolicies']:
-                    policy_version = iam_client.get_policy_version(
-                        PolicyArn=policy['PolicyArn'],
-                        VersionId=iam_client.get_policy(PolicyArn=policy['PolicyArn'])['Policy']['DefaultVersionId']
-                    )
-                    
-                    for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                attached_policies = get_cached_attached_policies(iam_client, role_name)
+                if attached_policies:
+                    for policy in attached_policies['AttachedPolicies']:
+                        policy_version = get_cached_policy_version(iam_client, policy['PolicyArn'])
+                        if not policy_version:
+                            continue
+                        
+                        for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            # Check if both actions are present
-                            if all(action.lower() in actions for action in USER_POLICY_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                # Check if both actions are present
+                                if all(action.lower() in actions for action in USER_POLICY_ACTIONS):
+                                    return True
                 
                 # Get inline policies
-                inline_policies = iam_client.list_role_policies(RoleName=role_name)
-                for policy_name in inline_policies['PolicyNames']:
-                    policy = iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)
-                    
-                    for statement in policy['PolicyDocument'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                role_policies = get_cached_role_policies(iam_client, role_name)
+                if role_policies:
+                    for policy_name in role_policies['PolicyNames']:
+                        policy = get_cached_inline_policy(iam_client, role_name, policy_name)
+                        if not policy:
+                            continue
+                        
+                        for statement in policy['PolicyDocument'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            # Check if both actions are present
-                            if all(action.lower() in actions for action in USER_POLICY_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                # Check if both actions are present
+                                if all(action.lower() in actions for action in USER_POLICY_ACTIONS):
+                                    return True
                 
                 return False
             except Exception:
                 return False
         
-        # Get all EC2 instances
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
+        # Process all EC2 instances
+        for instance in instances:
                     instance_id = instance['InstanceId']
                     instance_arn = f"arn:aws:ec2:{os.getenv('AWS_REGION', 'us-east-1')}:{account_id}:instance/{instance_id}"
                     
@@ -695,7 +780,7 @@ def check_ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_a
             "type": "ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_access"
         }]
 
-def check_ec2_instance_no_iam_role_with_write_access_to_resource_based_policies(ec2_client: boto3.client, iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
+def check_ec2_instance_no_iam_role_with_write_access_to_resource_based_policies(instances: List[Dict[str, Any]], iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with write access to resource-based policies"""
     try:
         results = []
@@ -729,7 +814,9 @@ def check_ec2_instance_no_iam_role_with_write_access_to_resource_based_policies(
             """Check if role has write access to resource-based policies"""
             try:
                 role_name = role_arn.split('/')[-1]
-                role = iam_client.get_role(RoleName=role_name)
+                role = get_cached_role(iam_client, role_name)
+                if not role:
+                    return False
                 
                 # Check assume role policy
                 assume_role_policy = json.loads(role['Role']['AssumeRolePolicyDocument'])
@@ -749,53 +836,53 @@ def check_ec2_instance_no_iam_role_with_write_access_to_resource_based_policies(
                     return False
                 
                 # Get attached policies
-                attached_policies = iam_client.list_attached_role_policies(RoleName=role_name)
-                for policy in attached_policies['AttachedPolicies']:
-                    policy_version = iam_client.get_policy_version(
-                        PolicyArn=policy['PolicyArn'],
-                        VersionId=iam_client.get_policy(PolicyArn=policy['PolicyArn'])['Policy']['DefaultVersionId']
-                    )
-                    
-                    for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                attached_policies = get_cached_attached_policies(iam_client, role_name)
+                if attached_policies:
+                    for policy in attached_policies['AttachedPolicies']:
+                        policy_version = get_cached_policy_version(iam_client, policy['PolicyArn'])
+                        if not policy_version:
+                            continue
+                        
+                        for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            if any(action.lower() in actions for action in RESOURCE_POLICY_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                if any(action.lower() in actions for action in RESOURCE_POLICY_ACTIONS):
+                                    return True
                 
                 # Get inline policies
-                inline_policies = iam_client.list_role_policies(RoleName=role_name)
-                for policy_name in inline_policies['PolicyNames']:
-                    policy = iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)
-                    
-                    for statement in policy['PolicyDocument'].get('Statement', []):
-                        if statement.get('Effect') == 'Allow':
-                            actions = statement.get('Action', [])
-                            if isinstance(actions, str):
-                                actions = [actions]
-                            
-                            if '*:*' in actions:
-                                return True
+                role_policies = get_cached_role_policies(iam_client, role_name)
+                if role_policies:
+                    for policy_name in role_policies['PolicyNames']:
+                        policy = get_cached_inline_policy(iam_client, role_name, policy_name)
+                        if not policy:
+                            continue
+                        
+                        for statement in policy['PolicyDocument'].get('Statement', []):
+                            if statement.get('Effect') == 'Allow':
+                                actions = statement.get('Action', [])
+                                if isinstance(actions, str):
+                                    actions = [actions]
                                 
-                            actions = {a.lower() for a in actions}
-                            if any(action.lower() in actions for action in RESOURCE_POLICY_ACTIONS):
-                                return True
+                                if '*:*' in actions:
+                                    return True
+                                    
+                                actions = {a.lower() for a in actions}
+                                if any(action.lower() in actions for action in RESOURCE_POLICY_ACTIONS):
+                                    return True
                 
                 return False
             except Exception:
                 return False
         
-        # Get all EC2 instances
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
+        # Process all EC2 instances
+        for instance in instances:
                     instance_id = instance['InstanceId']
                     instance_arn = f"arn:aws:ec2:{os.getenv('AWS_REGION', 'us-east-1')}:{account_id}:instance/{instance_id}"
                     
@@ -835,16 +922,13 @@ def check_ec2_instance_no_iam_role_with_write_access_to_resource_based_policies(
             "type": "ec2_instance_no_iam_role_with_write_access_to_resource_based_policies"
         }]
 
-def check_ec2_instance_no_iam_role_attached_with_credentials_exposure_access(ec2_client: boto3.client, iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
+def check_ec2_instance_no_iam_role_attached_with_credentials_exposure_access(instances: List[Dict[str, Any]], iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with credentials exposure access"""
     try:
         results = []
         
-        # Get all EC2 instances
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
+        # Process all EC2 instances
+        for instance in instances:
                     # Get instance name from tags
                     instance_name = instance['InstanceId']
                     for tag in instance.get('Tags', []):
@@ -1002,7 +1086,7 @@ def check_ec2_instance_no_iam_role_with_destruction_rds_access(ec2_client: boto3
             "type": "ec2_instance_no_iam_role_with_destruction_rds_access"
         }]
 
-def check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(ec2_client: boto3.client, iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
+def check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(instances: List[Dict[str, Any]], iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with cloud log tampering access"""
     try:
         results = []
@@ -1020,11 +1104,8 @@ def check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(ec2_client: b
             'waf:putloggingconfiguration'
         }
         
-        # Get all EC2 instances
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
+        # Process all EC2 instances
+        for instance in instances:
                     # Get instance name from tags
                     instance_name = instance['InstanceId']
                     for tag in instance.get('Tags', []):
@@ -1050,7 +1131,10 @@ def check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(ec2_client: b
                     
                     try:
                         # Check role permissions
-                        role = iam_client.get_role(RoleName=role_name)
+                        role = get_cached_role(iam_client, role_name)
+                        if not role:
+                            continue
+                            
                         has_tampering_permissions = False
                         
                         # Check assume role policy first
@@ -1068,34 +1152,14 @@ def check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(ec2_client: b
                         
                         if is_ec2_service:
                             # Check attached policies
-                            attached_policies = iam_client.list_attached_role_policies(RoleName=role_name)
-                            for policy in attached_policies['AttachedPolicies']:
-                                policy_version = iam_client.get_policy_version(
-                                    PolicyArn=policy['PolicyArn'],
-                                    VersionId=iam_client.get_policy(PolicyArn=policy['PolicyArn'])['Policy']['DefaultVersionId']
-                                )
-                                
-                                for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
-                                    if statement.get('Effect') == 'Allow':
-                                        actions = statement.get('Action', [])
-                                        if isinstance(actions, str):
-                                            actions = [actions]
-                                        actions = {a.lower() for a in actions}
-                                        
-                                        if '*:*' in actions or any(action.lower() in actions for action in LOG_TAMPERING_ACTIONS):
-                                            has_tampering_permissions = True
-                                            break
-                                
-                                if has_tampering_permissions:
-                                    break
+                            attached_policies = get_cached_attached_policies(iam_client, role_name)
+                            if attached_policies:
+                                for policy in attached_policies['AttachedPolicies']:
+                                    policy_version = get_cached_policy_version(iam_client, policy['PolicyArn'])
+                                    if not policy_version:
+                                        continue
                                     
-                            # Check inline policies if no tampering permissions found yet
-                            if not has_tampering_permissions:
-                                inline_policies = iam_client.list_role_policies(RoleName=role_name)
-                                for policy_name in inline_policies['PolicyNames']:
-                                    policy = iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)
-                                    
-                                    for statement in policy['PolicyDocument'].get('Statement', []):
+                                    for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
                                         if statement.get('Effect') == 'Allow':
                                             actions = statement.get('Action', [])
                                             if isinstance(actions, str):
@@ -1108,6 +1172,29 @@ def check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(ec2_client: b
                                     
                                     if has_tampering_permissions:
                                         break
+                                    
+                            # Check inline policies if no tampering permissions found yet
+                            if not has_tampering_permissions:
+                                role_policies = get_cached_role_policies(iam_client, role_name)
+                                if role_policies:
+                                    for policy_name in role_policies['PolicyNames']:
+                                        policy = get_cached_inline_policy(iam_client, role_name, policy_name)
+                                        if not policy:
+                                            continue
+                                        
+                                        for statement in policy['PolicyDocument'].get('Statement', []):
+                                            if statement.get('Effect') == 'Allow':
+                                                actions = statement.get('Action', [])
+                                                if isinstance(actions, str):
+                                                    actions = [actions]
+                                                actions = {a.lower() for a in actions}
+                                                
+                                                if '*:*' in actions or any(action.lower() in actions for action in LOG_TAMPERING_ACTIONS):
+                                                    has_tampering_permissions = True
+                                                    break
+                                        
+                                        if has_tampering_permissions:
+                                            break
                         
                         results.append({
                             "reason": f"{instance_name} has IAM role with cloud log tampering access." if has_tampering_permissions else f"{instance_name} has no IAM role with cloud log tampering access.",
@@ -1139,7 +1226,7 @@ def check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(ec2_client: b
             "type": "ec2_instance_no_iam_role_with_cloud_log_tampering_access"
         }]
 
-def check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configuration(ec2_client: boto3.client, iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
+def check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configuration(instances: List[Dict[str, Any]], iam_client: boto3.client, account_id: str) -> List[Dict[str, Any]]:
     """Check if EC2 instances have IAM roles with write permissions on critical S3 configurations"""
     try:
         results = []
@@ -1152,11 +1239,8 @@ def check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configur
             's3:putbucketversioning'
         }
         
-        # Get all EC2 instances
-        paginator = ec2_client.get_paginator('describe_instances')
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
+        # Process all EC2 instances
+        for instance in instances:
                     # Get instance name from tags
                     instance_name = instance['InstanceId']
                     for tag in instance.get('Tags', []):
@@ -1182,7 +1266,10 @@ def check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configur
                     
                     try:
                         # Check role permissions
-                        role = iam_client.get_role(RoleName=role_name)
+                        role = get_cached_role(iam_client, role_name)
+                        if not role:
+                            continue
+                            
                         has_critical_permissions = False
                         
                         # Check assume role policy first
@@ -1200,34 +1287,14 @@ def check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configur
                         
                         if is_ec2_service:
                             # Check attached policies
-                            attached_policies = iam_client.list_attached_role_policies(RoleName=role_name)
-                            for policy in attached_policies['AttachedPolicies']:
-                                policy_version = iam_client.get_policy_version(
-                                    PolicyArn=policy['PolicyArn'],
-                                    VersionId=iam_client.get_policy(PolicyArn=policy['PolicyArn'])['Policy']['DefaultVersionId']
-                                )
-                                
-                                for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
-                                    if statement.get('Effect') == 'Allow':
-                                        actions = statement.get('Action', [])
-                                        if isinstance(actions, str):
-                                            actions = [actions]
-                                        actions = {a.lower() for a in actions}
-                                        
-                                        if '*:*' in actions or any(action.lower() in actions for action in S3_CRITICAL_ACTIONS):
-                                            has_critical_permissions = True
-                                            break
-                                
-                                if has_critical_permissions:
-                                    break
+                            attached_policies = get_cached_attached_policies(iam_client, role_name)
+                            if attached_policies:
+                                for policy in attached_policies['AttachedPolicies']:
+                                    policy_version = get_cached_policy_version(iam_client, policy['PolicyArn'])
+                                    if not policy_version:
+                                        continue
                                     
-                            # Check inline policies if no critical permissions found yet
-                            if not has_critical_permissions:
-                                inline_policies = iam_client.list_role_policies(RoleName=role_name)
-                                for policy_name in inline_policies['PolicyNames']:
-                                    policy = iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)
-                                    
-                                    for statement in policy['PolicyDocument'].get('Statement', []):
+                                    for statement in policy_version['PolicyVersion']['Document'].get('Statement', []):
                                         if statement.get('Effect') == 'Allow':
                                             actions = statement.get('Action', [])
                                             if isinstance(actions, str):
@@ -1240,6 +1307,29 @@ def check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configur
                                     
                                     if has_critical_permissions:
                                         break
+                                    
+                            # Check inline policies if no critical permissions found yet
+                            if not has_critical_permissions:
+                                role_policies = get_cached_role_policies(iam_client, role_name)
+                                if role_policies:
+                                    for policy_name in role_policies['PolicyNames']:
+                                        policy = get_cached_inline_policy(iam_client, role_name, policy_name)
+                                        if not policy:
+                                            continue
+                                        
+                                        for statement in policy['PolicyDocument'].get('Statement', []):
+                                            if statement.get('Effect') == 'Allow':
+                                                actions = statement.get('Action', [])
+                                                if isinstance(actions, str):
+                                                    actions = [actions]
+                                                actions = {a.lower() for a in actions}
+                                                
+                                                if '*:*' in actions or any(action.lower() in actions for action in S3_CRITICAL_ACTIONS):
+                                                    has_critical_permissions = True
+                                                    break
+                                        
+                                        if has_critical_permissions:
+                                            break
                         
                         results.append({
                             "reason": f"{instance_name} has IAM role with write permission on critical s3 configuration." if has_critical_permissions else f"{instance_name} has no IAM role with write permission on critical s3 configuration.",
@@ -1281,40 +1371,54 @@ def check_ec2():
         sts_client = get_aws_client('sts')
         account_id = sts_client.get_caller_identity()["Account"]
         
+        # Retrieve all EC2 instances once
+        all_instances = []
+        paginator = ec2_client.get_paginator('describe_instances')
+        for page in paginator.paginate():
+            for reserv in page['Reservations']:
+                all_instances.extend(reserv['Instances'])
+        
         all_results = []
         
-        # Run checks
+        # Run checks with pre-fetched instances
         checks = [
-            lambda: check_ec2_instance_no_iam_role_with_org_write_access(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_access(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_access(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_access(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_write_access_to_resource_based_policies(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_attached_with_credentials_exposure_access(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_alter_critical_s3_permissions_configuration(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_destruction_kms_access(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_destruction_rds_access(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(ec2_client, iam_client, account_id),
-            lambda: check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configuration(ec2_client, iam_client, account_id)
+            lambda: check_ec2_instance_no_iam_role_with_org_write_access(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_access(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_access(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_access(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_write_access_to_resource_based_policies(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_attached_with_credentials_exposure_access(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_alter_critical_s3_permissions_configuration(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_destruction_kms_access(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_destruction_rds_access(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(all_instances, iam_client, account_id),
+            lambda: check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configuration(all_instances, iam_client, account_id)
         ]
         
-        # Execute each check and collect results
-        for check in checks:
-            try:
-                results = check()
-                if results:
-                    all_results.extend(results)
-                
-                # Insert results into database
+        # Execute checks in parallel and collect results
+        from concurrent.futures import ThreadPoolExecutor
+        
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            # Submit all checks to the executor
+            futures = [executor.submit(check) for check in checks]
+            
+            # Collect results as they complete
+            for future in futures:
                 try:
-                    insert_check_results(results)
+                    results = future.result()
+                    if results:
+                        all_results.extend(results)
                 except Exception as e:
-                    print(f"Error inserting results into database: {e}")
+                    print(f"Error executing check: {e}")
+                    continue
                     
-            except Exception as e:
-                print(f"Error executing check: {e}")
-                continue
+        # Batch insert all results into database
+        try:
+            if all_results:
+                insert_check_results(all_results)
+        except Exception as e:
+            print(f"Error inserting results into database: {e}")
         
         # Return results with pretty formatting
         return app.response_class(
