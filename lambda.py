@@ -1,13 +1,29 @@
 from flask import Flask, jsonify
 import boto3
 import psycopg2
+import psycopg2.extras
 from datetime import datetime, timezone
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import configparser
 import json
 import re
+import concurrent.futures
+from functools import partial
 
 app = Flask(__name__)
+
+# Cache for API calls
+function_url_config_cache = {}
+
+def get_cached_function_url_config(lambda_client, function_name: str) -> Dict:
+    """Get function URL configuration with caching"""
+    cache_key = f"{lambda_client._endpoint.host}:{function_name}"
+    if cache_key not in function_url_config_cache:
+        try:
+            function_url_config_cache[cache_key] = lambda_client.get_function_url_config(FunctionName=function_name)
+        except lambda_client.exceptions.ResourceNotFoundException:
+            function_url_config_cache[cache_key] = None
+    return function_url_config_cache[cache_key]
 
 # Load configuration
 config = configparser.ConfigParser()
@@ -414,8 +430,17 @@ def check_lambda_function_restrict_public_url(lambda_client, function: Dict, acc
         region = function_arn.split(':')[3]
         
         try:
-            # Try to get URL configuration using GetFunctionUrlConfig
-            url_config = lambda_client.get_function_url_config(FunctionName=function_name)
+            # Try to get URL configuration using GetFunctionUrlConfig with caching
+            url_config = get_cached_function_url_config(lambda_client, function_name)
+            if url_config is None:
+                return {
+                    "type": "lambda_function_restrict_public_url",
+                    "resource": function_arn,
+                    "status": "info",
+                    "reason": f"{function_name} having no URL config.",
+                    "region": region,
+                    "account": account_id
+                }
             
             auth_type = url_config.get('AuthType')
             return {
@@ -583,8 +608,17 @@ def check_lambda_function_cors_configuration(lambda_client, function: Dict, acco
         region = function_arn.split(':')[3]
         
         try:
-            # Try to get URL configuration using GetFunctionUrlConfig
-            url_config = lambda_client.get_function_url_config(FunctionName=function_name)
+            # Try to get URL configuration using GetFunctionUrlConfig with caching
+            url_config = get_cached_function_url_config(lambda_client, function_name)
+            if url_config is None:
+                return {
+                    "type": "lambda_function_cors_configuration",
+                    "resource": function_arn,
+                    "status": "info",
+                    "reason": f"{function_name} does not has a URL config.",
+                    "region": region,
+                    "account": account_id
+                }
             
             # Check CORS configuration
             cors_config = url_config.get('Cors', {})
@@ -642,6 +676,62 @@ def check_lambda_function_cors_configuration(lambda_client, function: Dict, acco
         return None
 
 @app.route('/check-lambda')
+def process_region(region: str, session: boto3.Session, cloudtrail_info: Dict, account_id: str) -> List[Dict]:
+    """Process all Lambda functions in a single region"""
+    region_results = []
+    try:
+        lambda_client = session.client('lambda', region_name=region)
+        ec2_client = session.client('ec2', region_name=region)
+        
+        try:
+            paginator = lambda_client.get_paginator('list_functions')
+            for page in paginator.paginate():
+                for function in page['Functions']:
+                    # Run each check
+                    checks = [
+                        check_lambda_function_dead_letter_queue(lambda_client, function, account_id),
+                        check_lambda_function_in_vpc(lambda_client, function, account_id),
+                        check_lambda_function_restrict_public_access(lambda_client, function, account_id),
+                        check_lambda_function_concurrent_execution_limit(lambda_client, function, account_id),
+                        check_lambda_function_cloudtrail_logging(lambda_client, function, cloudtrail_info, account_id),
+                        check_lambda_function_tracing(lambda_client, function, account_id),
+                        check_lambda_function_multiple_az(lambda_client, ec2_client, function, account_id),
+                        check_lambda_function_runtime(lambda_client, function, account_id),
+                        check_lambda_function_restrict_public_url(lambda_client, function, account_id),
+                        check_lambda_function_variables_no_sensitive_data(lambda_client, function, account_id),
+                        check_lambda_function_cloudwatch_insights(lambda_client, function, account_id),
+                        check_lambda_function_encryption(lambda_client, function, account_id),
+                        check_lambda_function_cors_configuration(lambda_client, function, account_id)
+                    ]
+                    
+                    # Filter out None results and add valid ones
+                    region_results.extend([r for r in checks if r])
+                    
+        except lambda_client.exceptions.ResourceNotFoundException:
+            print(f"No Lambda functions found in region {region}")
+        except Exception as e:
+            print(f"Error processing region {region}: {str(e)}")
+            
+    except Exception as e:
+        print(f"Error setting up clients for region {region}: {str(e)}")
+        
+    return region_results
+
+def batch_insert_results(cur: psycopg2.extensions.cursor, results: List[Dict]) -> None:
+    """Insert multiple results into the database in a single batch"""
+    if not results:
+        return
+        
+    values = [(r['reason'], r['resource'], r['status']) for r in results]
+    psycopg2.extras.execute_values(
+        cur,
+        """
+        INSERT INTO aws_project_status (description, resource, status)
+        VALUES %s
+        """,
+        values
+    )
+
 def check_lambda():
     try:
         session = boto3.Session(
@@ -666,61 +756,33 @@ def check_lambda():
         cur = conn.cursor()
 
         try:
-            for region in regions:
-                lambda_client = session.client('lambda', region_name=region)
-                ec2_client = session.client('ec2', region_name=region)
+            # Process regions in parallel using ThreadPoolExecutor
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                # Create a partial function with the common arguments
+                process_region_partial = partial(
+                    process_region,
+                    session=session,
+                    cloudtrail_info=cloudtrail_info,
+                    account_id=account_id
+                )
                 
-                try:
-                    paginator = lambda_client.get_paginator('list_functions')
-                    for page in paginator.paginate():
-                        for function in page['Functions']:
-                            # Run each check
-                            dlq_result = check_lambda_function_dead_letter_queue(lambda_client, function, account_id)
-                            vpc_result = check_lambda_function_in_vpc(lambda_client, function, account_id)
-                            public_access_result = check_lambda_function_restrict_public_access(lambda_client, function, account_id)
-                            concurrent_limit_result = check_lambda_function_concurrent_execution_limit(lambda_client, function, account_id)
-                            cloudtrail_result = check_lambda_function_cloudtrail_logging(lambda_client, function, cloudtrail_info, account_id)
-                            tracing_result = check_lambda_function_tracing(lambda_client, function, account_id)
-                            multiple_az_result = check_lambda_function_multiple_az(lambda_client, ec2_client, function, account_id)
-                            runtime_result = check_lambda_function_runtime(lambda_client, function, account_id)
-                            public_url_result = check_lambda_function_restrict_public_url(lambda_client, function, account_id)
-                            sensitive_vars_result = check_lambda_function_variables_no_sensitive_data(lambda_client, function, account_id)
-                            insights_result = check_lambda_function_cloudwatch_insights(lambda_client, function, account_id)
-                            encryption_result = check_lambda_function_encryption(lambda_client, function, account_id)
-                            cors_result = check_lambda_function_cors_configuration(lambda_client, function, account_id)
-                            
-                            # Process all results
-                            for result in [
-                                dlq_result,
-                                vpc_result,
-                                public_access_result,
-                                concurrent_limit_result,
-                                cloudtrail_result,
-                                tracing_result,
-                                multiple_az_result,
-                                runtime_result,
-                                public_url_result,
-                                sensitive_vars_result,
-                                insights_result,
-                                encryption_result,
-                                cors_result
-                            ]:
-                                if result:
-                                    cur.execute(
-                                        """
-                                        INSERT INTO aws_project_status (description, resource, status)
-                                        VALUES (%s, %s, %s)
-                                        """,
-                                        (result['reason'], result['resource'], result['status'])
-                                    )
-                                    all_results.append(result)
-                                    
-                except lambda_client.exceptions.ResourceNotFoundException:
-                    print(f"No Lambda functions found in region {region}")
-                    continue
-                except Exception as e:
-                    print(f"Error processing region {region}: {str(e)}")
-                    continue
+                # Submit all regions for processing
+                future_to_region = {
+                    executor.submit(process_region_partial, region): region
+                    for region in regions
+                }
+                
+                # Collect results as they complete
+                for future in concurrent.futures.as_completed(future_to_region):
+                    region = future_to_region[future]
+                    try:
+                        region_results = future.result()
+                        if region_results:
+                            # Batch insert results for this region
+                            batch_insert_results(cur, region_results)
+                            all_results.extend(region_results)
+                    except Exception as e:
+                        print(f"Error processing region {region}: {str(e)}")
 
             conn.commit()
             return jsonify({
