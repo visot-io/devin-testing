@@ -100,12 +100,22 @@ def home():
 def check_bucket_acls(s3_client, bucket_name):
     """Check S3 bucket ACLs"""
     try:
-        # Get bucket ACL
-        acl = s3_client.get_bucket_acl(Bucket=bucket_name)
+        # Get bucket ACL with caching
+        acl = get_cached_bucket_attribute(
+            'acl',
+            bucket_name,
+            s3_client,
+            'get_bucket_acl'
+        )
         
-        # Get bucket ownership controls
+        # Get bucket ownership controls with caching
         try:
-            ownership = s3_client.get_bucket_ownership_controls(Bucket=bucket_name)
+            ownership = get_cached_bucket_attribute(
+                'ownership',
+                bucket_name,
+                s3_client,
+                'get_bucket_ownership_controls'
+            )
         except s3_client.exceptions.ClientError:
             ownership = {'Rules': [{'ObjectOwnership': 'None'}]}
 
@@ -142,7 +152,12 @@ def check_bucket_acls(s3_client, bucket_name):
 def check_bucket_replication(s3_client, bucket_name):
     """Check S3 bucket cross-region replication"""
     try:
-        replication = s3_client.get_bucket_replication(Bucket=bucket_name)
+        replication = get_cached_bucket_attribute(
+            'replication',
+            bucket_name,
+            s3_client,
+            'get_bucket_replication'
+        )
         rep_rules = replication.get('ReplicationConfiguration', {}).get('Rules', [])
         
         has_enabled_rule = any(rule.get('Status') == 'Enabled' for rule in rep_rules)
@@ -224,9 +239,14 @@ def check_access_points(s3control_client, account_id):
 def check_bucket_encryption(s3_client, bucket_name):
     """Check S3 bucket default encryption"""
     try:
-        # Get bucket encryption configuration
+        # Get bucket encryption configuration with caching
         try:
-            encryption = s3_client.get_bucket_encryption(Bucket=bucket_name)
+            encryption = get_cached_bucket_attribute(
+                'encryption',
+                bucket_name,
+                s3_client,
+                'get_bucket_encryption'
+            )
             # If we get here, encryption is enabled
             status = "ok"
             reason = f"{bucket_name} default encryption enabled."
@@ -296,7 +316,13 @@ def check_bucket_ssl_enforcement(s3_client, bucket_name):
     """Check if S3 bucket enforces SSL/HTTPS through bucket policy"""
     try:
         try:
-            policy = s3_client.get_bucket_policy(Bucket=bucket_name)
+            # Get bucket policy with caching
+            policy = get_cached_bucket_attribute(
+                'policy',
+                bucket_name,
+                s3_client,
+                'get_bucket_policy'
+            )
             policy_json = json.loads(policy['Policy'])
             
             # Check for SSL enforcement in policy
@@ -340,8 +366,13 @@ def check_bucket_ssl_enforcement(s3_client, bucket_name):
 def check_bucket_event_notifications(s3_client, bucket_name):
     """Check if S3 bucket has event notifications enabled"""
     try:
-        # Get bucket notification configuration
-        notification = s3_client.get_bucket_notification_configuration(Bucket=bucket_name)
+        # Get bucket notification configuration with caching
+        notification = get_cached_bucket_attribute(
+            'notification',
+            bucket_name,
+            s3_client,
+            'get_bucket_notification_configuration'
+        )
         
         # Check for any type of notification configuration
         has_notifications = any([
@@ -372,8 +403,13 @@ def check_bucket_lifecycle_policy(s3_client, bucket_name):
     """Check if S3 bucket has lifecycle policies enabled"""
     try:
         try:
-            # Get bucket lifecycle configuration
-            lifecycle = s3_client.get_bucket_lifecycle_configuration(Bucket=bucket_name)
+            # Get bucket lifecycle configuration with caching
+            lifecycle = get_cached_bucket_attribute(
+                'lifecycle',
+                bucket_name,
+                s3_client,
+                'get_bucket_lifecycle_configuration'
+            )
             
             # Check for enabled rules
             has_enabled_rule = False
@@ -409,8 +445,13 @@ def check_bucket_lifecycle_policy(s3_client, bucket_name):
 def check_bucket_logging(s3_client, bucket_name):
     """Check if S3 bucket has logging enabled"""
     try:
-        # Get bucket logging configuration
-        logging = s3_client.get_bucket_logging(Bucket=bucket_name)
+        # Get bucket logging configuration with caching
+        logging = get_cached_bucket_attribute(
+            'logging',
+            bucket_name,
+            s3_client,
+            'get_bucket_logging'
+        )
         
         # Check if logging is enabled (LoggingEnabled will exist if logging is configured)
         if logging.get('LoggingEnabled'):
@@ -433,8 +474,13 @@ def check_bucket_logging(s3_client, bucket_name):
 def check_bucket_mfa_delete(s3_client, bucket_name):
     """Check if S3 bucket has MFA Delete enabled"""
     try:
-        # Get bucket versioning configuration
-        versioning = s3_client.get_bucket_versioning(Bucket=bucket_name)
+        # Get bucket versioning configuration with caching
+        versioning = get_cached_bucket_attribute(
+            'versioning',
+            bucket_name,
+            s3_client,
+            'get_bucket_versioning'
+        )
         
         # Check if MFA Delete is enabled
         mfa_delete = versioning.get('MFADelete') == 'Enabled'
@@ -459,8 +505,13 @@ def check_bucket_mfa_delete(s3_client, bucket_name):
 def check_bucket_authenticated_access(s3_client, bucket_name):
     """Check if S3 bucket is accessible to all authenticated users"""
     try:
-        # Get bucket ACL
-        acl = s3_client.get_bucket_acl(Bucket=bucket_name)
+        # Get bucket ACL with caching
+        acl = get_cached_bucket_attribute(
+            'acl',
+            bucket_name,
+            s3_client,
+            'get_bucket_acl'
+        )
         
         # Check for authenticated users access
         has_authenticated_access = False
@@ -490,9 +541,14 @@ def check_bucket_authenticated_access(s3_client, bucket_name):
 def check_bucket_object_lock(s3_client, bucket_name):
     """Check if S3 bucket has object lock enabled"""
     try:
-        # Get bucket object lock configuration
+        # Get bucket object lock configuration with caching
         try:
-            object_lock = s3_client.get_object_lock_configuration(Bucket=bucket_name)
+            object_lock = get_cached_bucket_attribute(
+                'object_lock',
+                bucket_name,
+                s3_client,
+                'get_object_lock_configuration'
+            )
             # If we get here, object lock is configured
             status = "ok"
             reason = f"{bucket_name} object lock enabled."
