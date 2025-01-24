@@ -1444,39 +1444,95 @@ def check_ec2():
         # Get all EC2 instances once
         ec2_instances = get_all_ec2_instances(ec2_client)
         all_results = []
+        batch_results = []  # Store results for batch database insert
         
-        # Run checks with cached instances
-        checks = [
-            lambda: check_ec2_instance_no_iam_role_with_org_write_access(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_access(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_access(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_access(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_write_access_to_resource_based_policies(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_attached_with_credentials_exposure_access(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_alter_critical_s3_permissions_configuration(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_destruction_kms_access(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_destruction_rds_access(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_cloud_log_tampering_access(ec2_client, iam_client, account_id, ec2_instances),
-            lambda: check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configuration(ec2_client, iam_client, account_id, ec2_instances)
-        ]
-        
-        # Execute each check and collect results
-        for check in checks:
-            try:
-                results = check()
-                if results:
-                    all_results.extend(results)
-                
-                # Insert results into database
-                try:
-                    insert_check_results(results)
-                except Exception as e:
-                    print(f"Error inserting results into database: {e}")
+        # Process each instance once and run all checks
+        for instance in ec2_instances:
+            instance_id = instance['InstanceId']
+            instance_name = instance_id
+            for tag in instance.get('Tags', []):
+                if tag['Key'] == 'Name':
+                    instance_name = tag['Value']
+                    break
                     
-            except Exception as e:
-                print(f"Error executing check: {e}")
+            instance_arn = f"arn:aws:ec2:{os.getenv('AWS_REGION', 'us-east-1')}:{account_id}:instance/{instance_id}"
+            
+            # Check if instance has IAM role
+            iam_profile = instance.get('IamInstanceProfile', {})
+            if not iam_profile:
+                # Add "ok" status for all checks when no IAM role is present
+                checks = [
+                    ("org_write", "organization write"),
+                    ("privilege_escalation", "privilege escalation"),
+                    ("group_creation", "new group creation with attached policy"),
+                    ("role_creation", "new role creation with attached policy"),
+                    ("user_creation", "new user creation with attached policy"),
+                    ("resource_policies", "write access to resource based policies"),
+                    ("credentials_exposure", "credentials exposure"),
+                    ("s3_permissions", "alter critical s3 permissions"),
+                    ("kms_destruction", "destruction KMS"),
+                    ("rds_destruction", "destruction RDS"),
+                    ("log_tampering", "cloud log tampering"),
+                    ("s3_config", "write permission on critical s3 configuration")
+                ]
+                
+                for check_type, description in checks:
+                    result = {
+                        "reason": f"{instance_name} has no IAM role with {description} access.",
+                        "resource": instance_arn,
+                        "status": "ok",
+                        "type": f"ec2_instance_no_iam_role_with_{check_type}_access"
+                    }
+                    all_results.append(result)
+                    batch_results.append(result)
                 continue
+            
+            # Get role permissions once for this instance
+            role_arn = iam_profile.get('Arn', '').replace(':instance-profile/', ':role/')
+            role_name = role_arn.split('/')[-1]
+            
+            try:
+                # Get cached role permissions once
+                role_data = get_role_permissions(iam_client, role_name)
+                if not role_data or not role_data['is_ec2_service']:
+                    continue
+                
+                # Run all security checks using the cached role data
+                checks = [
+                    (check_ec2_instance_no_iam_role_with_org_write_access, [instance]),
+                    (check_ec2_instance_no_iam_role_with_privilege_escalation_risk_access, [instance]),
+                    (check_ec2_instance_no_iam_role_with_new_group_creation_with_attached_policy_access, [instance]),
+                    (check_ec2_instance_no_iam_role_with_new_role_creation_with_attached_policy_access, [instance]),
+                    (check_ec2_instance_no_iam_role_with_new_user_creation_with_attached_policy_access, [instance]),
+                    (check_ec2_instance_no_iam_role_with_write_access_to_resource_based_policies, [instance]),
+                    (check_ec2_instance_no_iam_role_attached_with_credentials_exposure_access, [instance]),
+                    (check_ec2_instance_no_iam_role_with_alter_critical_s3_permissions_configuration, [instance]),
+                    (check_ec2_instance_no_iam_role_with_destruction_kms_access, [instance]),
+                    (check_ec2_instance_no_iam_role_with_destruction_rds_access, [instance]),
+                    (check_ec2_instance_no_iam_role_with_cloud_log_tampering_access, [instance]),
+                    (check_ec2_instance_no_iam_role_with_write_permission_on_critical_s3_configuration, [instance])
+                ]
+                
+                for check_func, instance_list in checks:
+                    try:
+                        results = check_func(ec2_client, iam_client, account_id, instance_list)
+                        if results:
+                            all_results.extend(results)
+                            batch_results.extend(results)
+                    except Exception as e:
+                        print(f"Error executing check for instance {instance_id}: {e}")
+                        continue
+                
+            except Exception as e:
+                print(f"Error checking role {role_name}: {str(e)}")
+                continue
+        
+        # Batch insert all results into database
+        try:
+            if batch_results:
+                insert_check_results(batch_results)
+        except Exception as e:
+            print(f"Error inserting results into database: {e}")
         
         # Return results with pretty formatting
         return app.response_class(
