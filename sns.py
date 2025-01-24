@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List
 import psycopg2
 import json
+import concurrent.futures
 
 app = Flask(__name__)
 
@@ -20,31 +21,49 @@ def get_db_connection():
         password=config['PostgreSQL']['PASSWORD']
     )
 
+def _fetch_sns_topics_in_region(sns_client, region: str) -> Dict:
+    """Fetch all SNS topics in a specific region"""
+    region_topics = {}
+    try:
+        paginator = sns_client.get_paginator('list_topics')
+        for page in paginator.paginate():
+            for topic in page['Topics']:
+                topic_arn = topic['TopicArn']
+                if topic_arn not in region_topics:
+                    attributes = sns_client.get_topic_attributes(TopicArn=topic_arn)['Attributes']
+                    region_topics[topic_arn] = {
+                        'attributes': attributes,
+                        'region': region,
+                        'name': topic_arn.split(':')[-1]
+                    }
+    except Exception as e:
+        print(f"Error getting topics in region {region}: {str(e)}")
+    return region_topics
+
 def get_all_sns_topics(session) -> Dict:
-    """Get all SNS topics across all regions"""
+    """Get all SNS topics across all regions using parallel processing"""
     topics = {}
     
     # Get all regions
     ec2_client = session.client('ec2', region_name='us-east-1')
     regions = [region['RegionName'] for region in ec2_client.describe_regions()['Regions']]
     
-    for region in regions:
-        sns_client = session.client('sns', region_name=region)
-        try:
-            paginator = sns_client.get_paginator('list_topics')
-            for page in paginator.paginate():
-                for topic in page['Topics']:
-                    topic_arn = topic['TopicArn']
-                    if topic_arn not in topics:
-                        attributes = sns_client.get_topic_attributes(TopicArn=topic_arn)['Attributes']
-                        topics[topic_arn] = {
-                            'attributes': attributes,
-                            'region': region,
-                            'name': topic_arn.split(':')[-1]
-                        }
-        except Exception as e:
-            print(f"Error getting topics in region {region}: {str(e)}")
+    # Process regions in parallel using ThreadPoolExecutor
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_region = {}
+        for region in regions:
+            sns_client = session.client('sns', region_name=region)
+            future = executor.submit(_fetch_sns_topics_in_region, sns_client, region)
+            future_to_region[future] = region
             
+        for future in concurrent.futures.as_completed(future_to_region):
+            region = future_to_region[future]
+            try:
+                region_topics = future.result()
+                topics.update(region_topics)
+            except Exception as e:
+                print(f"Error processing region {region}: {str(e)}")
+    
     return topics
 
 def check_sns_topic_encrypted_at_rest(topics: Dict, account_id: str) -> List[Dict[str, Any]]:
