@@ -492,20 +492,16 @@ def check_account_public_access_block(s3control_client, account_id):
         print(f"Error checking account public access block: {str(e)}")
         return None
 
-def check_bucket_account_public_access_block(s3_client, s3control_client, bucket_name, account_id):
+def check_bucket_account_public_access_block(s3_client, bucket_name, account_id, account_public_access_config):
     """Check if S3 bucket and account have public access blocks properly configured"""
     try:
-        # Get account-level settings
-        try:
-            account_response = s3control_client.get_public_access_block(AccountId=account_id)
-            account_config = account_response['PublicAccessBlockConfiguration']
-        except s3control_client.exceptions.ClientError:
-            account_config = {
-                'BlockPublicAcls': False,
-                'BlockPublicPolicy': False,
-                'IgnorePublicAcls': False,
-                'RestrictPublicBuckets': False
-            }
+        # Use cached account-level settings
+        account_config = account_public_access_config or {
+            'BlockPublicAcls': False,
+            'BlockPublicPolicy': False,
+            'IgnorePublicAcls': False,
+            'RestrictPublicBuckets': False
+        }
 
         # Get bucket-level settings
         try:
@@ -593,7 +589,7 @@ def check_bucket_public_access_block(s3_client, bucket_name):
         print(f"Error checking bucket public access block for {bucket_name}: {str(e)}")
         return None
 
-def check_one_bucket(bucket, s3_client, cloudtrail_client, s3control_client, account_id, buckets_with_logging, regions_with_logging):
+def check_one_bucket(bucket, s3_client, cloudtrail_client, account_id, buckets_with_logging, regions_with_logging, account_public_access_config):
     """Helper function to check a single bucket with all security checks"""
     bucket_name = bucket['Name']
     
@@ -615,8 +611,8 @@ def check_one_bucket(bucket, s3_client, cloudtrail_client, s3control_client, acc
         (check_bucket_website_hosting, [s3_client, bucket_name]),
         (check_bucket_versioning_and_lifecycle, [s3_client, bucket_name]),
         (check_bucket_versioning, [s3_client, bucket_name]),
-        (check_bucket_account_public_access_block, [s3_client, s3control_client, bucket_name, account_id]),
-        (check_bucket_public_access_block, [s3_client, bucket_name])
+        (check_bucket_public_access_block, [s3_client, bucket_name]),
+        (check_bucket_account_public_access_block, [s3_client, bucket_name, account_id, account_public_access_config])
     ]
     
     for check_func, args in checks:
@@ -646,19 +642,17 @@ def check_s3():
         
         all_results = []
 
-        # Check account-level public access block first
-        account_public_access_result = check_account_public_access_block(s3control_client, account_id)
-        if account_public_access_result:
-            formatted_result = {
-                "type": account_public_access_result['type'],
-                "resource_id": account_public_access_result['resource'],
-                "status": account_public_access_result['status'].upper(),
-                "message": account_public_access_result['reason'],
-                "timestamp": datetime.utcnow().isoformat(),
-                "region": "global",
-                "account": account_id
+        # Cache account-level public access block configuration
+        try:
+            response = s3control_client.get_public_access_block(AccountId=account_id)
+            account_public_access_config = response['PublicAccessBlockConfiguration']
+        except s3control_client.exceptions.ClientError:
+            account_public_access_config = {
+                'BlockPublicAcls': False,
+                'BlockPublicPolicy': False,
+                'IgnorePublicAcls': False,
+                'RestrictPublicBuckets': False
             }
-            all_results.append(formatted_result)
 
         # Get CloudTrail logging configuration
         trails = cloudtrail_client.list_trails()
@@ -694,6 +688,31 @@ def check_s3():
                         'AWS::S3::Object' in field_selector.get('Equals', [])):
                         regions_with_logging.add(trail_region)
 
+        # Get account-level public access block configuration once
+        account_public_access_config = None
+        account_public_access_result = check_account_public_access_block(s3control_client, account_id)
+        if account_public_access_result:
+            formatted_result = {
+                "type": account_public_access_result['type'],
+                "resource_id": account_public_access_result['resource'],
+                "status": account_public_access_result['status'].upper(),
+                "message": account_public_access_result['reason'],
+                "timestamp": datetime.utcnow().isoformat(),
+                "region": "global",
+                "account": account_id
+            }
+            all_results.append(formatted_result)
+            try:
+                response = s3control_client.get_public_access_block(AccountId=account_id)
+                account_public_access_config = response['PublicAccessBlockConfiguration']
+            except s3control_client.exceptions.ClientError:
+                account_public_access_config = {
+                    'BlockPublicAcls': False,
+                    'BlockPublicPolicy': False,
+                    'IgnorePublicAcls': False,
+                    'RestrictPublicBuckets': False
+                }
+
         # Check all buckets using ThreadPoolExecutor
         buckets = s3_client.list_buckets()['Buckets']
         formatted_results = []
@@ -705,10 +724,10 @@ def check_s3():
                     bucket,
                     s3_client,
                     cloudtrail_client,
-                    s3control_client,
                     account_id,
                     buckets_with_logging,
-                    regions_with_logging
+                    regions_with_logging,
+                    account_public_access_config
                 ): bucket for bucket in buckets
             }
             
