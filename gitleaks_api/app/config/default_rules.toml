@@ -1,0 +1,23 @@
+[[rules]]
+id = "generic-api-key"
+description = "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+regex = '''(?i)(?:key|api|token|secret|credential)(?:[0-9a-z\-_\t .]{0,20})(?:[\s|']|[\s|"]){0,3}(?:=|>|:=|\|\|:|<=|=>|:)(?:'|\"|\s|=|\x60){0,5}([0-9a-z\-_.=]{20,64})(?:['|\"|\n|\r|\s|\x60]|$)'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["key", "api", "token", "secret", "credential"]
+
+[[rules]]
+id = "checkr-api-key"
+description = "Checkr API Key"
+regex = '''CHECKR_PAY_SECRET_KEY=([0-9a-f]{32})'''
+secretGroup = 1
+entropy = 3.75
+keywords = ["checkr", "pay", "secret", "key"]
+
+[[rules]]
+id = "aws-access-key"
+description = "AWS Access Key ID"
+regex = '''(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["aws", "access", "key"]
