@@ -136,11 +136,16 @@ def load_config(config_path: Optional[str] = None, source_path: str = ".") -> Co
     # Order of precedence:
     # 1. config_path
     # 2. GITLEAKS_CONFIG environment variable
-    # 3. source_path/.gitleaks.toml
-    # 4. Default config
+    # 3. source_path/gitleaks.toml
+    # 4. source_path/.gitleaks.toml
+    # 5. script_dir/gitleaks.toml
+    # 6. script_dir_parent/gitleaks.toml
+    # 7. Default config
     
     config_content = None
     config_file_path = None
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir_parent = os.path.dirname(script_dir)
     
     # Check config_path
     if config_path and os.path.isfile(config_path):
@@ -152,11 +157,29 @@ def load_config(config_path: Optional[str] = None, source_path: str = ".") -> Co
         if os.path.isfile(env_path):
             config_file_path = env_path
     
+    # Check source_path/gitleaks.toml
+    if not config_file_path:
+        source_config = os.path.join(source_path, "gitleaks.toml")
+        if os.path.isfile(source_config):
+            config_file_path = source_config
+    
     # Check source_path/.gitleaks.toml
     if not config_file_path:
         source_config = os.path.join(source_path, ".gitleaks.toml")
         if os.path.isfile(source_config):
             config_file_path = source_config
+    
+    # Check script_dir/gitleaks.toml
+    if not config_file_path:
+        script_config = os.path.join(script_dir, "gitleaks.toml")
+        if os.path.isfile(script_config):
+            config_file_path = script_config
+    
+    # Check script_dir_parent/gitleaks.toml
+    if not config_file_path:
+        parent_config = os.path.join(script_dir_parent, "gitleaks.toml")
+        if os.path.isfile(parent_config):
+            config_file_path = parent_config
     
     # Load config from file or use default
     if config_file_path:

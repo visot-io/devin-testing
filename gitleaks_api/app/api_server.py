@@ -149,6 +149,7 @@ async def api_scan(request: ScanRequest = Body(...)):
 
 @app.get("/scan/json")
 async def api_scan_json(
+    target_dir: str = Query(..., description="Directory or file to scan"),
     redact: bool = Query(False, description="Whether to redact secrets"),
     verbose: bool = Query(False, description="Whether to show verbose output"),
     config_path: Optional[str] = Query(None, description="Path to gitleaks.toml configuration file")
@@ -202,6 +203,7 @@ async def api_scan_json(
         
         # Scan repository
         findings, error = scan_repository(
+            target_dir=target_dir,
             config_path=config_path,
             verbose=verbose
         )
@@ -228,6 +230,9 @@ async def api_scan_json(
                         print(f"Updated description for rule {finding['RuleID']}: {finding['Description']}")
         
         # Generate JSON report
+        if not findings:
+            return JSONResponse(content=[])
+            
         report = generate_report(
             findings=findings,
             output_format="json",
@@ -237,7 +242,12 @@ async def api_scan_json(
         # Return response
         if report is None:
             return JSONResponse(content=[])
-        return JSONResponse(content=json.loads(report))
+        
+        try:
+            return JSONResponse(content=json.loads(report))
+        except json.JSONDecodeError:
+            # Fallback to returning the findings directly
+            return JSONResponse(content=findings)
     
     except Exception as e:
         raise HTTPException(

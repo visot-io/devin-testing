@@ -141,7 +141,9 @@ def scan_repository(
     """
     # Import here to avoid circular imports
     from detect.git import GitScanner
+    from detect.detector import Detector
     from config.config import load_config
+    import os
     
     # Load GitHub configuration if not provided
     if not repo_url or not token:
@@ -178,6 +180,7 @@ def scan_repository(
         
         # Load configuration
         config = load_config(config_path)
+        config.verbose = verbose
         
         # Create a scanner
         scanner = GitScanner(config)
@@ -187,6 +190,30 @@ def scan_repository(
             print(f"Scanning repository in {target_dir}")
         
         findings = scanner.scan(target_dir)
+        
+        # If no findings and not a Git repository, try content scanning
+        if not findings and not os.path.exists(os.path.join(target_dir, ".git")):
+            if verbose:
+                print(f"{target_dir} is not a Git repository, falling back to content scanning")
+            
+            # Create a detector for content scanning
+            detector = Detector(config)
+            
+            # Scan files in the directory
+            content_findings = []
+            for root, _, files in os.walk(target_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                        file_findings = detector.scan_content(content, file_path)
+                        content_findings.extend(file_findings)
+                    except Exception as e:
+                        if verbose:
+                            print(f"Error scanning file {file_path}: {e}")
+            
+            findings = content_findings
         
         return findings, None
     
